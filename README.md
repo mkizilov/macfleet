@@ -17,6 +17,8 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetKit/Storage` | Bounded in-memory snapshot store |
 | `Sources/MacFleetKit/Processes` | Process listing through libproc, permission-aware readings, CPU windows, and sorting, search, totals, and grouping |
 | `Sources/MacFleetKit/Alerts` | Alert metrics, settings and their persistence, notification permission and delivery (`UserNotificationAlertNotifier`), and recording mocks |
+| `Sources/MacFleetKit/Remote` | Remote metrics protocol: versioned JSON messages, framing, TLS with a pinned host identity, HMAC client authentication, the network policy, and host and client sessions |
+| `docs/remote-protocol.md` | Protocol specification: identity model, authentication, wire format, compatibility rules, and threat model |
 | `Sources/MacFleetKit/Networking` | Wire format for snapshots (no transport yet) |
 | `Sources/MacFleetState/History` | Bounded metric history for charts (`MetricHistory`) |
 | `Sources/MacFleetState/Presentation` | Presentation models: display values, spoken wording, usage levels, chart data. No SwiftUI |
@@ -409,6 +411,24 @@ Each alert has its own enable switch, threshold, sustained period, and cooldown.
 - Hysteresis margins are fixed in code, not settings. A sustained period is only as precise as the sample interval.
 - The engine's cost per sample was not measured.
 
+## Remote monitoring protocol
+
+MacFleet can serve its metric snapshots to an authenticated client over TLS. The protocol is versioned (1.0) and carries JSON messages in length-prefixed frames. It lives in `MacFleetKit` (`Sources/MacFleetKit/Remote`) and has no SwiftUI dependency. No app or agent command starts a host or client yet. The full specification, including the identity model, the authentication design, the compatibility rules, and the threat model, is in [docs/remote-protocol.md](docs/remote-protocol.md).
+
+- **Host identity.** The host holds a PKCS#12 bundle with an RSA-2048 certificate. A client pins the SHA-256 fingerprint of that certificate. There is no certificate authority and no trust on first use. The bundle is imported in memory only, which needs macOS 15.
+- **Client authentication.** Each client has a 256-bit secret. Each side proves it holds the secret with HMAC-SHA256 over a transcript that covers the session and the TLS channel binding. The host proves it too, and the client checks that proof before it accepts anything.
+- **Nothing before authentication.** The host sends no metrics or capabilities until the client's proof verifies.
+- **Private networks.** The host closes connections from outside loopback and the Tailscale ranges (`100.64.0.0/10` and `fd7a:115c:a1e0::/48`) before it reads a byte.
+- **Limits.** Frames are capped at 1 MiB and sessions at 8. Every handshake step, the idle timeout, and the TLS start have deadlines.
+
+### Limitations
+
+- Not verified on a real tailnet. The Tailscale ranges are unit-tested, and loopback is tested end to end.
+- Certificate expiry was not tested, and EC identities did not import in testing. Only RSA identities are supported.
+- Failed authentication attempts are not rate-limited or logged, and there is no revocation list beyond removing a credential.
+- Secrets and identities are held in memory by the caller. Keychain storage is not implemented.
+- No entry point runs a host or client, and no configuration is persisted.
+
 ## Verified commands
 
 Run from the repository root.
@@ -427,7 +447,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 375 Swift Testing tests in 93 suites passed (33 of them cover processes and 47 cover alerts), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 445 Swift Testing tests in 104 suites passed (33 of them cover processes, 47 cover alerts, and 70 cover the remote protocol), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -443,6 +463,7 @@ The test suites cover:
 - Simulated metrics: determinism, physical ranges, growing counters, the deliberate CPU gap, and default exclusions.
 - The monitoring selection, its JSON round trip, and the model: dashboard built on refresh, history capacity, source toggles that rebuild immediately, and the expanded state.
 - The sampling loop, which stops when cancelled.
+- Remote protocol: every message's encoding, the envelope and date format on the wire, compatibility with unknown types, fields, and error codes, framing and the frame limits, version negotiation, the authentication proofs and transcript binding, credential and fingerprint validation, the network policy, identity import and pin acceptance, and loopback TLS sessions. The sessions cover a full handshake, refused credentials, a wrong pin, a refused network, a version mismatch, no metrics before authentication, an idle client, heartbeats, and teardown. The loopback suite is serialized and uses ports 21401–21411. Its identity tests need macOS 15.
 - Alerts: settings values and persistence, the engine's sustained periods, hysteresis, cooldown, sleep and unavailable handling with a simulated clock, the model's permission and posting paths, the status model's path, and the presentation wording (see Alerts).
 - Processes: aggregation, sorting, search, and totals; the monitor's CPU windows, counter resets, exits during collection, PID reuse, and denied and failed listings; a live listing of this process and a busy-loop CPU check; presentation wording; and the model's sampling lifecycle.
 
@@ -524,7 +545,7 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 - The bundle identifier `dev.macfleet.MacFleet` is a placeholder. Change `PRODUCT_BUNDLE_IDENTIFIER` before signing for distribution.
 - The app is ad-hoc signed for local runs (`CODE_SIGN_IDENTITY = "-"`). No team is configured.
 - The menu bar icon is an SF Symbol (`server.rack`) rather than a custom asset.
-- Snapshots are local to this Mac. Networking transport is not implemented; `FleetWireFormat` only defines the payload.
+- Snapshots are local to this Mac. The remote protocol is implemented as a library in `MacFleetKit`, but no app or agent entry point uses it yet. `FleetWireFormat` still defines the agent's JSON payload.
 - Memory now uses the binary formatter everywhere, so a memory total shows as "16 GB". The earlier popover used the system memory style, which can differ slightly.
 - Usage is shown as Elevated from 75% and Critical from 90%, for CPU, memory, and disks alike. Pressure maps warning to elevated and critical to critical.
 - Not included: interface MAC addresses, IPv6 addresses, wireless details, per-volume I/O throughput, and per-process network use.
