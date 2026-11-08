@@ -30,7 +30,7 @@ Command Line Tools and Swift 6.4.4. Nothing here was run on a second Mac, on Git
 | `swift build --disable-sandbox` (default and `--build-system swiftbuild`) | SwiftPM's build | Not complete. The manifest compiles, and both build systems stop at the build service's `XCBuildData` write (see below) |
 | `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build` | The Xcode application project | Not run. Xcode is not installed in this environment |
 | `swift-format lint --strict` with a candidate configuration | Style findings across the sources | Ran: 1,424 findings in 132 files, all style. Not a gate (see Lint below) |
-| `gitleaks git` (pinned 8.30.1, checksum-verified, in `.tools/`) | Secrets in every commit | Passed: no leaks in 23 commits |
+| `gitleaks git` (pinned 8.30.1, checksum-verified, in `.tools/`) | Secrets in every commit | Passed: no leaks in any commit on any ref |
 
 ## Areas
 
@@ -63,7 +63,7 @@ Command Line Tools and Swift 6.4.4. Nothing here was run on a second Mac, on Git
 | Time limits on hanging steps | Verified | A three-second bound stopped the real test binary, and the bounded helper keeps errexit and exit status. The Swift Testing time limit names a blocked test after a minute | A hang inside a real remote peer |
 | MIT license | Verified | `LICENSE` matches the Open Source Initiative text after whitespace and quote normalization. A test pins its first line and copyright. The packages carry it | Legal review. The licence choice and the copyright holder are the owner's |
 | Third-party software | Verified | No third-party source or dependency in the tracked tree or the history. The packages link only system libraries | An audit of the Apple SDK's own terms, which are not redistributed |
-| Publication scan | Verified, with one finding | gitleaks over 23 commits: no leaks. The current tree has no personal data or key material. There is no remote, and `.opencode/` has never been tracked | One historic commit contains an absolute home-folder path. See Publication checks |
+| Publication scan | Verified, with one finding | gitleaks over every commit: no leaks. The current tree has no personal data or key material. There is no remote, and `.opencode/` has never been tracked | One historic commit contains an absolute home-folder path. See Publication checks |
 | Lint and formatting | Partial | `swift-format lint` runs with the Command Line Tools' 6.4.4 | No gate. 1,424 style findings in 132 files, none of them a behaviour change |
 | CI workflow | Unverified | The YAML parses, every referenced script exists, and `ReleaseMetadataTests` guard the runner and toolchain | A run on GitHub |
 | Performance budgets | Partial | `performance-check.sh`: dashboard work, history save, queries, fleet ingest, history memory growth, reopen | Resident memory of a running app or agent, and rendering |
@@ -71,7 +71,7 @@ Command Line Tools and Swift 6.4.4. Nothing here was run on a second Mac, on Git
 
 ## Publication checks
 
-- **Secrets.** gitleaks 8.30.1 scanned all 23 commits on every ref and found no leaks. The binary came from the project's
+- **Secrets.** gitleaks 8.30.1 scanned every commit on every ref and found no leaks. The binary came from the project's
   GitHub release, and its checksum was checked against the release's checksum file before it ran. It sits in `.tools/`,
   which is git-ignored.
 - **Current tree.** `git grep` finds no personal path, email address, or key material in tracked files. The only

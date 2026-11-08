@@ -28,7 +28,7 @@ secrets and personal data in the tracked tree and in the full history, and the c
   service's `XCBuildData` write.
 - Ran swift-format's lint over the sources. It reports 1,424 style findings in 132 files and no behaviour change. The project
   has no lint gate, so the result is reported, not enforced.
-- Scanned for secrets and personal data. gitleaks found no leaks in 23 commits, and the tracked tree is clean. One historic
+- Scanned for secrets and personal data. gitleaks found no leaks in any commit, and the tracked tree is clean. One historic
   commit (`78c32d5`) contains an absolute home-folder path. It is reported, and the history has not been rewritten.
 
 **Fixed in earlier passes.** The protocol-fixture warning, the CI pipe and runner defects, and the stale documentation claims.
