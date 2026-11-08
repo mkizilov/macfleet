@@ -13,7 +13,7 @@ public final class ProcessMonitorModel {
     public private(set) var searchText = ""
 
     private let monitor: ProcessMonitor
-    private let interval: Duration
+    private var interval: Duration
     private var snapshot: ProcessSnapshot?
     private var watcher: Task<Void, Never>?
 
@@ -35,6 +35,11 @@ public final class ProcessMonitorModel {
         watcher = nil
         task?.cancel()
         await task?.value
+    }
+
+    /// Changes the rate. A running watch loop uses it from its next wait.
+    public func setInterval(_ interval: Duration) {
+        self.interval = interval
     }
 
     /// Takes one sample now, outside the watch loop.

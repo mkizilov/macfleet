@@ -9,46 +9,81 @@ import UniformTypeIdentifiers
 struct MacFleetApp: App {
     @NSApplicationDelegateAdaptor(MacFleetAppDelegate.self) private var appDelegate
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some Scene {
-        MenuBarExtra {
-            StatusPopoverView(
-                model: appDelegate.model,
-                onShowProcesses: { showWindow("processes") },
-                onShowAlerts: { showWindow("alerts") },
-                onShowFleet: { showWindow("fleet") },
-                onShowHistory: { showWindow("history") }
-            )
-        } label: {
-            MenuBarLabelView(presentation: appDelegate.model.dashboard?.menuBar)
-                .task { await appDelegate.model.runSampling(every: .background) }
-        }
-        .menuBarExtraStyle(.window)
+        Group {
+            MenuBarExtra {
+                StatusPopoverView(
+                    model: appDelegate.model,
+                    onShowProcesses: { showWindow(.processes) },
+                    onShowAlerts: { showSettings(.notifications) },
+                    onShowFleet: { showWindow(.fleet) },
+                    onShowHistory: { showWindow(.history) },
+                    onShowSettings: { showSettings(.general) }
+                )
+            } label: {
+                MenuBarLabelView(presentation: appDelegate.model.menuBarLabel)
+                    // Restarts whenever the chosen rate changes, so the menu bar samples at exactly the saved rate.
+                    .task(id: appDelegate.settings.preferences.backgroundSeconds) {
+                        await appDelegate.model.runSampling(every: appDelegate.settings.preferences.interval(for: .background))
+                    }
+            }
+            .menuBarExtraStyle(.window)
 
-        Window("Processes", id: "processes") {
-            ProcessWindowContent(model: appDelegate.processes)
-        }
+            Window("Processes", id: AppWindow.processes.id) {
+                ProcessWindowContent(model: appDelegate.processes)
+            }
+            .defaultSize(width: 720, height: 560)
 
-        Window("Alert Settings", id: "alerts") {
-            AlertSettingsWindowContent(model: appDelegate.alerts)
-        }
+            Window("Fleet", id: AppWindow.fleet.id) {
+                FleetWindowContent(model: appDelegate.fleet)
+            }
+            .defaultSize(width: 520, height: 720)
 
-        Window("Fleet", id: "fleet") {
-            FleetWindowContent(model: appDelegate.fleet)
-        }
+            Window("History", id: AppWindow.history.id) {
+                if let history = appDelegate.history {
+                    FleetHistoryWindowContent(model: history)
+                } else {
+                    Text("History is unavailable in this session.")
+                        .padding()
+                }
+            }
+            .defaultSize(width: 660, height: 760)
 
-        Window("History", id: "history") {
-            if let history = appDelegate.history {
-                FleetHistoryWindowContent(model: history)
-            } else {
-                Text("History is unavailable in this session.")
-                    .padding()
+            Settings {
+                SettingsWindowContent(settings: appDelegate.settings, alerts: appDelegate.alerts)
+            }
+        }
+        .commands {
+            CommandMenu("Navigate") {
+                ForEach(AppCommand.allCases, id: \.self) { command in
+                    Button(command.title) { run(command.destination) }
+                        .keyboardShortcut(KeyEquivalent(command.key), modifiers: .command)
+                }
             }
         }
     }
 
-    private func showWindow(_ id: String) {
-        openWindow(id: id)
+    private func run(_ destination: AppDestination) {
+        switch destination {
+        case .refresh:
+            Task { await appDelegate.model.refresh() }
+        case let .window(window):
+            showWindow(window)
+        case let .settings(pane):
+            showSettings(pane)
+        }
+    }
+
+    private func showWindow(_ window: AppWindow) {
+        openWindow(id: window.id)
+        NSApplication.shared.activate()
+    }
+
+    private func showSettings(_ pane: SettingsPane) {
+        appDelegate.settings.show(pane)
+        openSettings()
         NSApplication.shared.activate()
     }
 }
@@ -91,7 +126,8 @@ private struct FleetWindowContent: View {
                     case .remove: model.remove(id)
                     }
                 }
-            }
+            },
+            onGroup: { id, group in MainActor.assumeIsolated { model.setGroup(id, group) } }
         )
     }
 }
@@ -159,9 +195,30 @@ private func exportHistory(_ model: FleetHistoryModel) async {
     }
 }
 
-/// Connects the alert settings window to its model. The permission is read again when the window opens, because the
-/// user may have changed it in System Settings since.
-private struct AlertSettingsWindowContent: View {
+/// The Settings window: General preferences, and the Notifications pane with the alert thresholds.
+private struct SettingsWindowContent: View {
+    let settings: PreferencesModel
+    let alerts: AlertCenterModel
+
+    var body: some View {
+        SettingsView(
+            presentation: settings.presentation,
+            onMenuBar: { metric, shown in MainActor.assumeIsolated { settings.setMenuBarMetric(metric, shown: shown) } },
+            onRefresh: { kind, seconds in MainActor.assumeIsolated { settings.setRefresh(kind, seconds: seconds) } },
+            onLaunchAtLogin: { enabled in MainActor.assumeIsolated { settings.setLaunchAtLogin(enabled) } },
+            onOpenLoginItems: { MainActor.assumeIsolated { settings.openLoginItemsSettings() } },
+            onPane: { pane in MainActor.assumeIsolated { settings.show(pane) } },
+            onReset: { MainActor.assumeIsolated { settings.resetToDefaults() } }
+        ) {
+            AlertSettingsPane(model: alerts)
+        }
+        .onAppear { MainActor.assumeIsolated { settings.refreshLaunchStatus() } }
+    }
+}
+
+/// The notification thresholds. The permission is read again when the pane opens, because the user may have changed it
+/// in System Settings since.
+private struct AlertSettingsPane: View {
     let model: AlertCenterModel
 
     var body: some View {

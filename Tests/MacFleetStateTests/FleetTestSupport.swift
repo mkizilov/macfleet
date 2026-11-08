@@ -26,6 +26,8 @@ enum FleetScriptEnd: Sendable {
 actor FleetScriptedOpener: RemoteSessionOpening {
     private var scripts: [UUID: [FleetScriptedSession]]
     private(set) var attempts: [UUID: Int] = [:]
+    /// The rate each session opened at, in order, so a test can check that a rate change reaches the sessions.
+    private(set) var intervals: [UUID: [SamplingInterval]] = [:]
 
     init(_ scripts: [UUID: [FleetScriptedSession]]) {
         self.scripts = scripts
@@ -34,6 +36,7 @@ actor FleetScriptedOpener: RemoteSessionOpening {
     func open(_ target: RemoteTarget, interval: SamplingInterval) async -> AsyncThrowingStream<RemoteUpdate, any Error> {
         let id = target.record.id
         attempts[id, default: 0] += 1
+        intervals[id, default: []].append(interval)
         var queue = scripts[id] ?? []
         let next = queue.isEmpty ? FleetScriptedSession.fail(.connectionFailed("no script left")) : queue.removeFirst()
         scripts[id] = queue

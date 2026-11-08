@@ -6,10 +6,12 @@ import MacFleetState
 @MainActor
 final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
     let model: FleetStatusModel
-    let processes = ProcessMonitorModel(monitor: ProcessMonitor())
+    let processes: ProcessMonitorModel
     let alerts: AlertCenterModel
     let fleet: FleetOverviewModel
     let history: FleetHistoryModel?
+    /// The user's settings. Every change reaches the models above through `apply`.
+    let settings: PreferencesModel
     private var powerObservers: [NSObjectProtocol] = []
 
     override init() {
@@ -24,19 +26,39 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
             history: storage.fleet,
             hostAlerts: hostAlerts
         )
-        self.alerts = alerts
-        self.fleet = fleet
-        history = storage.fleet.map { store in
-            FleetHistoryModel(store: store, identities: { fleet.historyIdentities }, hostAlerts: hostAlerts)
-        }
-        model = FleetStatusModel(
+        let model = FleetStatusModel(
             engine: SamplingEngine(provider: ProcessSystemMetricsProvider(), store: storage.store),
             historySource: storage.history,
             startupNotice: storage.notice,
             alerts: alerts,
             overview: fleet
         )
+        let processes = ProcessMonitorModel(monitor: ProcessMonitor())
+        self.alerts = alerts
+        self.fleet = fleet
+        self.model = model
+        self.processes = processes
+        history = storage.fleet.map { store in
+            FleetHistoryModel(store: store, identities: { fleet.historyIdentities }, hostAlerts: hostAlerts)
+        }
+        settings = PreferencesModel(store: UserDefaultsPreferencesStore(), launchAtLogin: ServiceLaunchAtLogin()) { preferences in
+            Self.apply(preferences, model: model, processes: processes, fleet: fleet)
+        }
         super.init()
+    }
+
+    /// Hands saved settings to the models that use them. Runs at launch and after each change. The background rate is
+    /// applied by the menu bar's task, which restarts whenever it changes.
+    private static func apply(
+        _ preferences: AppPreferences,
+        model: FleetStatusModel,
+        processes: ProcessMonitorModel,
+        fleet: FleetOverviewModel
+    ) {
+        model.setMenuBarMetrics(preferences.menuBarMetrics)
+        processes.setInterval(preferences.interval(for: .processes).duration)
+        fleet.setRemoteSampleInterval(preferences.interval(for: .remote))
+        Task { await model.setInteractiveInterval(preferences.interval(for: .popover)) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

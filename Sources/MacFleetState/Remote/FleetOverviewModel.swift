@@ -10,6 +10,7 @@ public struct PairingDraft: Equatable, Sendable {
     public var port = String(RemoteProtocol.defaultPort)
     public var clientID = ""
     public var secret = ""
+    public var group = ""
 
     public init() {}
 }
@@ -20,11 +21,12 @@ public enum PairingField: Equatable, Sendable {
     case port
     case clientID
     case secret
+    case group
 }
 
 /// What a confirmed pairing does.
 public enum PairingPurpose: Equatable, Sendable {
-    case newMac(label: String, clientID: String, credential: RemoteCredential)
+    case newMac(label: String, clientID: String, credential: RemoteCredential, group: String? = nil)
     /// Trust the Mac's current certificate, after its certificate changed and the user has checked the new fingerprint.
     case trustAgain(recordID: UUID)
 }
@@ -48,6 +50,7 @@ public enum PairingProblem: Error, Equatable, Sendable {
     case port
     case clientID
     case secret
+    case group
     case limitReached(Int)
     case probe(RemoteFailure)
     case notRegistered
@@ -69,8 +72,6 @@ public enum PairingState: Equatable, Sendable {
 public final class FleetOverviewModel {
     /// The most remote Macs the app monitors at once. Each one holds a connection and a retry clock.
     public static let maximumRemoteMacs = 16
-    /// How often each remote Mac sends a snapshot.
-    public static let remoteSampleInterval = SamplingInterval(seconds: 5)
 
     public private(set) var presentation: FleetOverviewPresentation
     public private(set) var draft = PairingDraft()
@@ -91,6 +92,8 @@ public final class FleetOverviewModel {
     private var probeTask: Task<Void, Never>?
     private var recordsWritable = true
     private var started = false
+    /// How often each registered Mac sends a snapshot. Set from the settings.
+    private var remoteInterval = SamplingInterval(seconds: Double(RefreshKind.remote.defaultSeconds))
     private var lastEvaluated: [UUID: Date] = [:]
     private let history: (any FleetHistoryStoring)?
     private let hostAlerts: HostAlertCenter?
@@ -158,6 +161,7 @@ public final class FleetOverviewModel {
         case .port: draft.port = value
         case .clientID: draft.clientID = value
         case .secret: draft.secret = value
+        case .group: draft.group = value
         }
         rebuild()
     }
@@ -177,7 +181,7 @@ public final class FleetOverviewModel {
                     pairing = .confirming(PendingPairing(
                         endpoint: valid.endpoint,
                         probe: result,
-                        purpose: .newMac(label: valid.label, clientID: valid.clientID, credential: valid.credential)
+                        purpose: .newMac(label: valid.label, clientID: valid.clientID, credential: valid.credential, group: valid.group)
                     ))
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -224,8 +228,8 @@ public final class FleetOverviewModel {
             return
         }
         switch pending.purpose {
-        case let .newMac(label, clientID, credential):
-            savePairedMac(pending, label: label, clientID: clientID, credential: credential)
+        case let .newMac(label, clientID, credential, group):
+            savePairedMac(pending, label: label, clientID: clientID, credential: credential, group: group)
         case let .trustAgain(recordID):
             trustAgain(recordID, pending)
         }
@@ -291,6 +295,37 @@ public final class FleetOverviewModel {
         rebuild()
     }
 
+    /// Moves a registered Mac under another group, or out of its group when `group` is nil. The change is saved at once.
+    public func setGroup(_ id: UUID, _ group: String?) {
+        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
+        let label = records[index].label
+        guard recordsWritable else {
+            notice = "\(label) cannot be moved while the saved list cannot be read."
+            rebuild()
+            return
+        }
+        var saved = records
+        saved[index] = saved[index].grouped(group)
+        do {
+            try store.save(saved)
+        } catch {
+            notice = "\(label) could not be moved. \(error.localizedDescription)"
+            rebuild()
+            return
+        }
+        records = saved
+        rebuild()
+    }
+
+    /// Changes how often each registered Mac reports. An open session is reopened at the new rate.
+    public func setRemoteSampleInterval(_ interval: SamplingInterval) {
+        guard interval != remoteInterval else { return }
+        remoteInterval = interval
+        for record in records where watchers[record.id] != nil {
+            Task { [self] in await restart(record) }
+        }
+    }
+
     /// Stops every watcher. Call when the app quits.
     public func stopAll() async {
         probeTask?.cancel()
@@ -304,6 +339,7 @@ public final class FleetOverviewModel {
         let endpoint: RemoteEndpoint
         let clientID: String
         let credential: RemoteCredential
+        let group: String?
     }
 
     private func validatedPairing() throws -> ValidatedPairing {
@@ -323,6 +359,10 @@ public final class FleetOverviewModel {
         }
         let clientID = draft.clientID.trimmingCharacters(in: .whitespaces)
         guard RemoteCredential.isValidClientID(clientID) else { throw PairingProblem.clientID }
+        let group = RemoteHostRecord.normalizedGroup(draft.group)
+        if let group, group.count > RemoteHostRecord.maximumGroupLength {
+            throw PairingProblem.group
+        }
         guard let secret = Data(base64Encoded: draft.secret.trimmingCharacters(in: .whitespacesAndNewlines)),
               let credential = try? RemoteCredential(clientID: clientID, secret: secret)
         else {
@@ -335,7 +375,8 @@ public final class FleetOverviewModel {
             label: label,
             endpoint: RemoteEndpoint(host: host, port: port),
             clientID: clientID,
-            credential: credential
+            credential: credential,
+            group: group
         )
     }
 
@@ -343,7 +384,8 @@ public final class FleetOverviewModel {
         _ pending: PendingPairing,
         label: String,
         clientID: String,
-        credential: RemoteCredential
+        credential: RemoteCredential,
+        group: String?
     ) {
         guard records.count < Self.maximumRemoteMacs else {
             fail(.limitReached(Self.maximumRemoteMacs))
@@ -355,7 +397,8 @@ public final class FleetOverviewModel {
             port: pending.endpoint.port,
             clientID: clientID,
             pinnedFingerprint: pending.probe.presentedFingerprint,
-            addedAt: scheduling.now()
+            addedAt: scheduling.now(),
+            group: group
         )
         let account = Self.account(record.id)
         do {
@@ -421,7 +464,7 @@ public final class FleetOverviewModel {
         let watcher = RemoteHostWatcher(
             target: target,
             opener: opener,
-            interval: Self.remoteSampleInterval,
+            interval: remoteInterval,
             backoff: backoff,
             scheduling: scheduling,
             history: history

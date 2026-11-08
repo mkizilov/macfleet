@@ -1,8 +1,8 @@
 import MacFleetState
 import SwiftUI
 
-/// The unified dashboard: the local Mac, every registered remote Mac, and the form that adds one. It takes presentation
-/// values and action closures only, so it holds no state of its own.
+/// The unified dashboard: this Mac, every registered Mac under its group, and the form that adds one. It takes
+/// presentation values and action closures only, so it holds no state of its own.
 public struct FleetOverviewView: View {
     private let presentation: FleetOverviewPresentation
     private let onField: @Sendable (PairingField, String) -> Void
@@ -10,6 +10,7 @@ public struct FleetOverviewView: View {
     private let onConfirm: @Sendable () -> Void
     private let onCancel: @Sendable () -> Void
     private let onAction: @Sendable (UUID, MacCardAction) -> Void
+    private let onGroup: @Sendable (UUID, String?) -> Void
 
     public init(
         presentation: FleetOverviewPresentation,
@@ -17,7 +18,8 @@ public struct FleetOverviewView: View {
         onCheck: @escaping @Sendable () -> Void,
         onConfirm: @escaping @Sendable () -> Void,
         onCancel: @escaping @Sendable () -> Void,
-        onAction: @escaping @Sendable (UUID, MacCardAction) -> Void
+        onAction: @escaping @Sendable (UUID, MacCardAction) -> Void,
+        onGroup: @escaping @Sendable (UUID, String?) -> Void
     ) {
         self.presentation = presentation
         self.onField = onField
@@ -25,6 +27,7 @@ public struct FleetOverviewView: View {
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         self.onAction = onAction
+        self.onGroup = onGroup
     }
 
     public var body: some View {
@@ -37,9 +40,18 @@ public struct FleetOverviewView: View {
                     Label(notice, systemImage: "exclamationmark.circle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                ForEach(presentation.cards) { card in
-                    MacCardView(card: card, onAction: onAction)
+                ForEach(presentation.groups) { group in
+                    groupSection(group)
+                }
+                if let emptyText = presentation.emptyText {
+                    SectionCard("Remote Macs") {
+                        Text(emptyText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 PairingFormView(
                     draft: presentation.draft,
@@ -55,12 +67,27 @@ public struct FleetOverviewView: View {
         }
         .frame(minWidth: 460, minHeight: 600)
     }
+
+    /// The heading is shown for remote sections. This Mac's card has its own title.
+    private func groupSection(_ group: FleetGroupPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if group.id != "local" {
+                Text(group.title)
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+            }
+            ForEach(group.cards) { card in
+                MacCardView(card: card, onAction: onAction, onGroup: onGroup)
+            }
+        }
+    }
 }
 
 /// One Mac: its reachability, why it is not connected, its metrics, and the actions that apply to it.
 struct MacCardView: View {
     let card: MacCardPresentation
     let onAction: @Sendable (UUID, MacCardAction) -> Void
+    let onGroup: @Sendable (UUID, String?) -> Void
 
     var body: some View {
         SectionCard(card.title) {
@@ -103,7 +130,7 @@ struct MacCardView: View {
 
     @ViewBuilder
     private var actions: some View {
-        if let hostID = card.hostID, !card.actions.isEmpty {
+        if let hostID = card.hostID {
             HStack {
                 ForEach(card.actions, id: \.self) { action in
                     switch action {
@@ -115,6 +142,17 @@ struct MacCardView: View {
                         Button("Remove", role: .destructive) { onAction(hostID, .remove) }
                     }
                 }
+                Menu(card.group.map { "Group: \($0)" } ?? "Group: None") {
+                    ForEach(card.groupChoices, id: \.self) { name in
+                        Button(name) { onGroup(hostID, name) }
+                            .disabled(card.group == name)
+                    }
+                    Divider()
+                    Button("No Group") { onGroup(hostID, nil) }
+                        .disabled(card.group == nil)
+                }
+                .fixedSize()
+                .accessibilityHint("Moves this Mac to another group")
             }
         }
     }
@@ -170,6 +208,7 @@ struct PairingFormView: View {
                 TextField("Port", text: binding(draft.port) { onField(.port, $0) })
                 TextField("Client ID", text: binding(draft.clientID) { onField(.clientID, $0) })
                 SecureField("Client secret", text: binding(draft.secret) { onField(.secret, $0) })
+                TextField("Group (optional)", text: binding(draft.group) { onField(.group, $0) })
                 Text("Create the secret on that Mac with `macfleet-headless credential add`.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -213,7 +252,9 @@ struct PairingFormView: View {
                 HStack {
                     Button(confirmation.confirmLabel, action: onConfirm)
                         .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
                     Button("Cancel", action: onCancel)
+                        .keyboardShortcut(.cancelAction)
                 }
             }
         case let .failed(message):

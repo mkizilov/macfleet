@@ -27,31 +27,68 @@ public struct SummaryPresentation: Equatable, Sendable {
     }
 }
 
-/// Compact values for the menu bar. Unavailable values show a dash, never zero.
+/// Compact values for the menu bar. Unavailable values show a dash, never zero. Each metric has a short visible label and a
+/// spoken phrase, so the label reads in full to VoiceOver.
 public struct MenuBarPresentation: Equatable, Sendable {
     public let cpuText: String
     public let memoryText: String
     public let networkText: String
+    public let diskText: String
     public let accessibilityLabel: String
+    private let cpuSpoken: String
+    private let memorySpoken: String
+    private let networkSpoken: String
+    private let diskSpoken: String
 
-    init(cpu: Presented<UsageValue>, memory: Presented<UsageValue>, network: NetworkRate?) {
+    init(cpu: Presented<UsageValue>, memory: Presented<UsageValue>, network: NetworkRate?, disk: Presented<UsageValue>) {
         cpuText = cpu.availableValue?.text ?? "–"
         memoryText = memory.availableValue?.text ?? "–"
+        diskText = disk.availableValue?.text ?? "–"
         if let network {
             networkText = "↓\(ByteFormatting.compact(bytesPerSecond: network.receivedPerSecond)) ↑\(ByteFormatting.compact(bytesPerSecond: network.sentPerSecond))"
         } else {
             networkText = "↓– ↑–"
         }
 
-        var parts = ["MacFleet."]
-        parts.append(cpu.availableValue.map { "CPU \($0.spokenText)." } ?? "CPU unavailable.")
-        parts.append(memory.availableValue.map { "Memory \($0.spokenText)." } ?? "Memory unavailable.")
+        cpuSpoken = cpu.availableValue.map { "CPU \($0.spokenText)." } ?? "CPU unavailable."
+        memorySpoken = memory.availableValue.map { "Memory \($0.spokenText)." } ?? "Memory unavailable."
         if let network {
-            parts.append("Download \(SpokenFormatting.rate(network.receivedPerSecond)), upload \(SpokenFormatting.rate(network.sentPerSecond)).")
+            networkSpoken = "Download \(SpokenFormatting.rate(network.receivedPerSecond)), upload \(SpokenFormatting.rate(network.sentPerSecond))."
         } else {
-            parts.append("Network unavailable.")
+            networkSpoken = "Network unavailable."
         }
-        accessibilityLabel = parts.joined(separator: " ")
+        diskSpoken = disk.availableValue.map { "Startup disk \($0.spokenText)." } ?? "Startup disk unavailable."
+        accessibilityLabel = ["MacFleet.", cpuSpoken, memorySpoken, networkSpoken].joined(separator: " ")
+    }
+
+    /// The item for one metric. The visible labels are short, so several metrics fit in the menu bar.
+    func item(for metric: MenuBarMetric) -> MenuBarItem {
+        switch metric {
+        case .cpu: MenuBarItem(metric: .cpu, text: "CPU \(cpuText)", spokenText: cpuSpoken)
+        case .memory: MenuBarItem(metric: .memory, text: "Mem \(memoryText)", spokenText: memorySpoken)
+        case .network: MenuBarItem(metric: .network, text: networkText, spokenText: networkSpoken)
+        case .disk: MenuBarItem(metric: .disk, text: "Disk \(diskText)", spokenText: diskSpoken)
+        }
+    }
+}
+
+/// The startup disk's use, read from the root volume. Missing values say why.
+enum StartupDisk {
+    static func presented(_ volumes: MetricReading<[VolumeMetrics]>) -> Presented<UsageValue> {
+        switch volumes {
+        case let .unavailable(issue):
+            return .unavailable(issue.errorDescription ?? "Unavailable")
+        case let .available(list):
+            guard let root = list.first(where: { $0.mountPoint == "/" }) else {
+                return .unavailable("The startup disk is not reported")
+            }
+            switch root.capacity {
+            case let .available(capacity):
+                return .available(UsageValue(fraction: capacity.utilization))
+            case let .unavailable(issue):
+                return .unavailable(issue.errorDescription ?? "Unavailable")
+            }
+        }
     }
 }
 
@@ -119,7 +156,8 @@ public struct DashboardPresentation: Equatable, Sendable {
         menuBar = MenuBarPresentation(
             cpu: cpu.total,
             memory: memory.usage,
-            network: AggregateNetworkRate.rate(snapshot.network)
+            network: AggregateNetworkRate.rate(snapshot.network),
+            disk: StartupDisk.presented(snapshot.volumes)
         )
     }
 }

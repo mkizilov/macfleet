@@ -22,6 +22,8 @@ public final class FleetStatusModel {
     public var isShowingDetails = false
     public private(set) var historyRange = HistoryRange.hour
     public private(set) var historyCard: HistoryCardPresentation
+    /// The menu bar label for the chosen metrics. Nil until the first sample.
+    public private(set) var menuBarLabel: MenuBarLabelPresentation?
 
     private let engine: SamplingEngine
     private let historySource: (any HistorySource)?
@@ -33,6 +35,8 @@ public final class FleetStatusModel {
     private var isPopoverVisible = false
     private var historySequence = 0
     private var lastHistoryAttempt: Date?
+    private var menuBarMetrics = AppPreferences.default.menuBarMetrics
+    private var interactiveInterval = SamplingInterval.interactive
 
     public init(
         engine: SamplingEngine,
@@ -71,7 +75,7 @@ public final class FleetStatusModel {
     public func popoverDidAppear() async {
         guard !isPopoverVisible else { return }
         isPopoverVisible = true
-        let subscription = await engine.subscribe(interval: .interactive)
+        let subscription = await engine.subscribe(interval: interactiveInterval)
         guard isPopoverVisible else {
             await engine.unsubscribe(subscription.id)
             return
@@ -89,6 +93,21 @@ public final class FleetStatusModel {
         interactiveSampling = nil
         task?.cancel()
         await task?.value
+    }
+
+    /// Sets the rate the popover samples at. An open popover switches at once.
+    public func setInteractiveInterval(_ interval: SamplingInterval) async {
+        guard interval != interactiveInterval else { return }
+        interactiveInterval = interval
+        guard isPopoverVisible else { return }
+        await popoverDidDisappear()
+        await popoverDidAppear()
+    }
+
+    /// Sets which metrics the menu bar shows. An empty list shows the icon alone.
+    public func setMenuBarMetrics(_ metrics: [MenuBarMetric]) {
+        menuBarMetrics = metrics
+        rebuildMenuBar()
     }
 
     /// Samples now. Joins a collection that is already in progress rather than starting another.
@@ -230,5 +249,10 @@ public final class FleetStatusModel {
     private func rebuildDashboard() {
         guard let snapshot else { return }
         dashboard = DashboardPresentation(snapshot: snapshot, history: history, selection: selection)
+        rebuildMenuBar()
+    }
+
+    private func rebuildMenuBar() {
+        menuBarLabel = dashboard.map { MenuBarLabelPresentation(menuBar: $0.menuBar, metrics: menuBarMetrics) }
     }
 }

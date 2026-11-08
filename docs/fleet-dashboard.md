@@ -35,7 +35,7 @@ Each Mac shows one of these states, with the reason in words:
 | State | Indicator | What happens next |
 | --- | --- | --- |
 | Connecting | Yellow | The first attempt, or a reconnect that has just started. |
-| Online | Green | Snapshots arrive about every five seconds. |
+| Online | Green | Snapshots arrive every 10 seconds by default (5, 10, or 30 in Settings). |
 | Offline | Orange | A transient failure. The next try is scheduled, with the time shown. |
 | Stopped | Red | A failure that retries cannot fix. Nothing is retried until you act. |
 

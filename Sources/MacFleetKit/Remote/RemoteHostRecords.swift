@@ -11,6 +11,8 @@ public struct RemoteHostRecord: Codable, Equatable, Identifiable, Sendable {
     public let clientID: String
     public let pinnedFingerprint: HostFingerprint
     public let addedAt: Date
+    /// The group this Mac is shown under. Nil means ungrouped. Records saved before groups existed decode with nil.
+    public let group: String?
 
     public init(
         id: UUID = UUID(),
@@ -19,7 +21,8 @@ public struct RemoteHostRecord: Codable, Equatable, Identifiable, Sendable {
         port: UInt16,
         clientID: String,
         pinnedFingerprint: HostFingerprint,
-        addedAt: Date
+        addedAt: Date,
+        group: String? = nil
     ) {
         self.id = id
         self.label = label
@@ -28,10 +31,32 @@ public struct RemoteHostRecord: Codable, Equatable, Identifiable, Sendable {
         self.clientID = clientID
         self.pinnedFingerprint = pinnedFingerprint
         self.addedAt = addedAt
+        self.group = group
+    }
+
+    public static let maximumGroupLength = 32
+
+    /// The group name as the user meant it: trimmed, and nil when nothing is left.
+    public static func normalizedGroup(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     public var endpoint: RemoteEndpoint {
         RemoteEndpoint(host: host, port: port)
+    }
+
+    public func grouped(_ name: String?) -> RemoteHostRecord {
+        RemoteHostRecord(
+            id: id,
+            label: label,
+            host: host,
+            port: port,
+            clientID: clientID,
+            pinnedFingerprint: pinnedFingerprint,
+            addedAt: addedAt,
+            group: Self.normalizedGroup(name)
+        )
     }
 
     /// The same host with a new pinned identity, used after the user confirms a changed certificate.
@@ -43,7 +68,8 @@ public struct RemoteHostRecord: Codable, Equatable, Identifiable, Sendable {
             port: port,
             clientID: clientID,
             pinnedFingerprint: fingerprint,
-            addedAt: addedAt
+            addedAt: addedAt,
+            group: group
         )
     }
 }

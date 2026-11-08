@@ -64,7 +64,10 @@ struct DashboardPreviews: PreviewProvider {
             .frame(width: 360)
             .previewDisplayName("Overview")
 
-            MenuBarLabelView(presentation: DashboardPreviewData.dashboard().menuBar)
+            MenuBarLabelView(presentation: MenuBarLabelPresentation(
+                menuBar: DashboardPreviewData.dashboard().menuBar,
+                metrics: AppPreferences.default.menuBarMetrics
+            ))
                 .padding()
                 .previewDisplayName("Menu bar")
         }

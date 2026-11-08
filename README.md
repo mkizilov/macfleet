@@ -23,6 +23,11 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetUI/Fleet` | The unified dashboard and the add-a-Mac form |
 | `docs/fleet-dashboard.md` | The Fleet window: pairing, trust, retries, storage, and limits |
 | `docs/multi-host-history.md` | Multi-Mac history: host identity, clock handling, retention, queries, export, and limits |
+| `docs/app-settings.md` | Settings, navigation and shortcuts, empty and error states, groups, accessibility, the energy review, and what is not verified |
+| `Sources/MacFleetKit/Preferences` | Settings values and validation, their storage, and the launch-at-login control (`SMAppService`) |
+| `Sources/MacFleetState/Preferences` | The settings model: saves each change, pushes it to the models that use it, and reports load, save, and login-item problems |
+| `Sources/MacFleetState/Navigation` | Windows, Settings panes, and the keyboard command table |
+| `Sources/MacFleetUI/Settings` | The Settings window: General and Notifications |
 | `Sources/MacFleetKit/History/HistoryHost.swift` | Host IDs, ingest outcomes, window summaries, and the fleet storage protocol |
 | `Sources/MacFleetKit/History/HistoryCSV.swift` | CSV rendering for the history export |
 | `Sources/MacFleetState/History/FleetHistoryModel.swift` | The multi-Mac history model: selection, range, totals, retention, alerts, and export |
@@ -41,10 +46,10 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetUI/Dashboard` | Section cards and the dashboard content view |
 | `Sources/MacFleetUI` | Popover (`StatusPopoverView`), menu bar label (`MenuBarLabelView`) |
 | `Sources/MacFleetUI/Processes` | The Processes window's view (`ProcessMonitorView`) |
-| `Sources/MacFleetUI/Alerts` | The Alert Settings window's view (`AlertSettingsView`) |
+| `Sources/MacFleetUI/Alerts` | The notification thresholds view (`AlertSettingsView`), shown on the Settings window's Notifications pane |
 | `Sources/MacFleetUI/Previews` | Preview providers fed by the simulated timeline |
 | `Sources/MacFleetAgent` | Command-line agent target |
-| `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`), the Processes window, and the Alert Settings window |
+| `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`), the Fleet, History, and Processes windows, the Settings window, and the Navigate commands |
 | `MacFleet.xcodeproj` | Xcode application project with Debug and Release configurations |
 | `Tests/` | Swift Testing suites for the kit and the state layer |
 | `scripts/swiftc-verify.sh` | Verified build, test, and agent-run pipeline using `swiftc` only |
@@ -218,8 +223,8 @@ Sampling is owned by `SamplingEngine` (`Sources/MacFleetKit/Sampling`), an actor
 
 | Caller | Interval | Lifetime |
 | --- | --- | --- |
-| Menu bar label | 10 s (`SamplingInterval.background`) | While the label exists |
-| Popover | 2 s (`SamplingInterval.interactive`) | While the popover is visible |
+| Menu bar label | 10 s by default (5, 10, 30, or 60 s in Settings) | While the label exists |
+| Popover | 2 s by default (1, 2, or 5 s in Settings) | While the popover is visible |
 
 A subscription lasts as long as its `updates` stream. Releasing the stream, or cancelling the task that consumes it, unsubscribes. Keep the `Subscription` value alive for as long as you want updates.
 
@@ -396,7 +401,7 @@ The listing runs on the monitor actor, off the main thread. At this process coun
 
 ## Alerts
 
-Alerts announce a resource condition with a native notification. Each alert is configured in the **Alert Settings** window, opened from **Windows** in the popover. Every sample is evaluated, including while the popover is closed, so alerts run whenever the app runs.
+Alerts announce a resource condition with a native notification. Each alert is configured on the **Notifications** pane of **Settings** (⌘,), also reachable from **Windows** in the popover. Every sample is evaluated, including while the popover is closed, so alerts run whenever the app runs.
 
 | Alert | Measured as | Default threshold | Fires at | Clears only past |
 | --- | --- | --- | --- | --- |
@@ -429,7 +434,8 @@ Each alert has its own enable switch, threshold, sustained period, and cooldown.
 ### Limitations
 
 - Notification delivery was not run. The app is not bundled here, so `UserNotificationAlertNotifier` compiles and is covered by its status mapping, but the permission prompt and banners were not seen.
-- The Alert Settings window and the Windows menu were typechecked, not rendered.
+- The Settings window and the Windows menu were typechecked, not rendered. No XCUITest target was added, because neither Xcode nor `xcodebuild` is available here.
+- Launch at login was not registered, since a test run must not change login items. The `SMAppService` path is covered through its state mapping only.
 - No notice is sent when an alert clears. Recovery notices were left out to keep notifications rare.
 - Hysteresis margins are fixed in code, not settings. A sustained period is only as precise as the sample interval.
 - The engine's cost per sample was not measured.
@@ -512,7 +518,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 628 Swift Testing tests in 135 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, and 61 cover multi-host history), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 690 Swift Testing tests in 150 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, 61 cover multi-host history, and 62 cover settings, navigation, groups, and accessibility), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -595,7 +601,7 @@ The app target needs Xcode because SwiftUI's `@State` macro plugin ships only wi
 
 The menu bar label starts a sampling loop that refreshes every two seconds. Opening the popover or pressing Refresh also samples.
 
-Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, the Sources toggles, the Processes window (its opening, layout, and sampling stopping when it closes), and the Alert Settings window, its Windows menu, and notifications appearing on screen. The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
+Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, the Sources toggles, the Processes window (its opening, layout, and sampling stopping when it closes), and the Settings window, its Windows menu, and notifications appearing on screen. The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
 
 ## Run the agent
 

@@ -54,10 +54,11 @@ struct SparklineChart: View {
             }
             penDown = true
         }
+        // Upload is dashed as well as a different color, so the two lines differ without color.
         context.stroke(
             path,
             with: .color(series.role.color),
-            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: series.role == .upload ? [4, 3] : [])
         )
     }
 }

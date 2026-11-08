@@ -9,19 +9,22 @@ public struct StatusPopoverView: View {
     private let onShowAlerts: () -> Void
     private let onShowFleet: () -> Void
     private let onShowHistory: () -> Void
+    private let onShowSettings: () -> Void
 
     public init(
         model: FleetStatusModel,
         onShowProcesses: @escaping () -> Void,
         onShowAlerts: @escaping () -> Void,
         onShowFleet: @escaping () -> Void,
-        onShowHistory: @escaping () -> Void
+        onShowHistory: @escaping () -> Void,
+        onShowSettings: @escaping () -> Void
     ) {
         self.model = model
         self.onShowProcesses = onShowProcesses
         self.onShowAlerts = onShowAlerts
         self.onShowFleet = onShowFleet
         self.onShowHistory = onShowHistory
+        self.onShowSettings = onShowSettings
     }
 
     public var body: some View {
@@ -46,7 +49,7 @@ public struct StatusPopoverView: View {
                 }
                 .frame(maxHeight: model.isShowingDetails ? 600 : 360)
             } else {
-                Text("No system data yet.")
+                Text("Waiting for the first sample.")
                     .foregroundStyle(.secondary)
             }
             if let errorMessage = model.errorMessage {
@@ -92,9 +95,12 @@ public struct StatusPopoverView: View {
                 Button("Fleet", action: onShowFleet)
                 Button("History", action: onShowHistory)
                 Button("Processes", action: onShowProcesses)
-                Button("Alerts", action: onShowAlerts)
+                Divider()
+                Button("Notification Settings…", action: onShowAlerts)
+                Button("Settings…", action: onShowSettings)
             }
             .fixedSize()
+            .accessibilityHint("Opens another window")
             Button("Refresh") {
                 Task { await model.refresh() }
             }

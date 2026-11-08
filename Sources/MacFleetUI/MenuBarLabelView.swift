@@ -1,21 +1,20 @@
 import MacFleetState
 import SwiftUI
 
-/// Compact status for the menu bar: CPU, memory, and network rates. Missing values show a dash.
+/// The menu bar label: the icon, then the metrics the user chose. With none chosen it is the icon alone. Values that
+/// could not be read show a dash, and VoiceOver reads the full label.
 public struct MenuBarLabelView: View {
-    private let presentation: MenuBarPresentation?
+    private let presentation: MenuBarLabelPresentation?
 
-    public init(presentation: MenuBarPresentation?) {
+    public init(presentation: MenuBarLabelPresentation?) {
         self.presentation = presentation
     }
 
     public var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "server.rack")
-            if let presentation {
-                Text("\(presentation.cpuText) · \(presentation.memoryText)")
-                    .monospacedDigit()
-                Text(presentation.networkText)
+            if let presentation, !presentation.items.isEmpty {
+                Text(presentation.visibleText)
                     .monospacedDigit()
             }
         }

@@ -43,6 +43,10 @@ public struct MacCardPresentation: Equatable, Sendable, Identifiable {
     public let sampleText: String?
     public let metrics: [MetricTile]
     public let actions: [MacCardAction]
+    /// The group the Mac is shown under. Nil for the local Mac and for ungrouped Macs.
+    public let group: String?
+    /// Groups the user can move this Mac to, sorted. Empty for the local Mac.
+    public let groupChoices: [String]
 }
 
 public struct DraftPresentation: Equatable, Sendable {
@@ -51,6 +55,7 @@ public struct DraftPresentation: Equatable, Sendable {
     public let port: String
     public let clientID: String
     public let secret: String
+    public let group: String
     public let canSubmit: Bool
 
     init(_ draft: PairingDraft) {
@@ -59,6 +64,7 @@ public struct DraftPresentation: Equatable, Sendable {
         port = draft.port
         clientID = draft.clientID
         secret = draft.secret
+        group = draft.group
         canSubmit = [draft.label, draft.host, draft.port, draft.clientID, draft.secret].allSatisfy {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -95,13 +101,44 @@ public enum PairingPresentation: Equatable, Sendable {
     }
 }
 
+/// A section of the dashboard: a heading and the Macs under it.
+public struct FleetGroupPresentation: Equatable, Sendable, Identifiable {
+    public let id: String
+    public let title: String
+    public let cards: [MacCardPresentation]
+
+    /// This Mac first, then the named groups in name order, then the Macs with no group.
+    static func build(local: MacCardPresentation, remote: [MacCardPresentation]) -> [FleetGroupPresentation] {
+        var sections = [FleetGroupPresentation(id: "local", title: "This Mac", cards: [local])]
+        let named = Dictionary(grouping: remote.filter { $0.group != nil }, by: { $0.group ?? "" })
+        for name in named.keys.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+            sections.append(FleetGroupPresentation(id: "group:\(name)", title: name, cards: named[name] ?? []))
+        }
+        let ungrouped = remote.filter { $0.group == nil }
+        if !ungrouped.isEmpty {
+            sections.append(FleetGroupPresentation(
+                id: "ungrouped",
+                title: named.isEmpty ? "Remote Macs" : "Other Macs",
+                cards: ungrouped
+            ))
+        }
+        return sections
+    }
+}
+
 /// Everything the unified dashboard shows. Built when the state changes, never inside a view body.
 public struct FleetOverviewPresentation: Equatable, Sendable {
     public let cards: [MacCardPresentation]
+    /// The same cards, in the sections they are shown under.
+    public let groups: [FleetGroupPresentation]
+    /// Shown in place of the remote Macs when none are registered. Nil otherwise.
+    public let emptyText: String?
     public let draft: DraftPresentation
     public let pairing: PairingPresentation
     public let canAddMore: Bool
     public let notice: String?
+
+    public static let emptyFleetText = "No other Macs yet. Add one below with its Tailscale name or private IP address. Each Mac is monitored, and its history is kept separately."
 
     public init(
         local: RemoteSnapshot?,
@@ -112,10 +149,15 @@ public struct FleetOverviewPresentation: Equatable, Sendable {
         notice: String?,
         canAddMore: Bool
     ) {
+        let choices = Array(Set(records.compactMap(\.group)))
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         let remote = records
             .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
-            .map { MacCardPresentation.remote($0, statuses[$0.id]) }
-        cards = [MacCardPresentation.local(local)] + remote
+            .map { MacCardPresentation.remote($0, statuses[$0.id], groupChoices: choices) }
+        let localCard = MacCardPresentation.local(local)
+        cards = [localCard] + remote
+        groups = FleetGroupPresentation.build(local: localCard, remote: remote)
+        emptyText = records.isEmpty ? Self.emptyFleetText : nil
         self.draft = DraftPresentation(draft)
         self.pairing = PairingPresentation(pairing, records: records)
         self.canAddMore = canAddMore
@@ -137,7 +179,9 @@ extension MacCardPresentation {
                 failureText: nil,
                 sampleText: nil,
                 metrics: [],
-                actions: []
+                actions: [],
+                group: nil,
+                groupChoices: []
             )
         }
         return MacCardPresentation(
@@ -151,11 +195,13 @@ extension MacCardPresentation {
             failureText: nil,
             sampleText: TimeText.sampled(snapshot.capturedAt, current: true),
             metrics: MetricTiles.all(snapshot),
-            actions: []
+            actions: [],
+            group: nil,
+            groupChoices: []
         )
     }
 
-    static func remote(_ record: RemoteHostRecord, _ status: RemoteHostStatus?) -> MacCardPresentation {
+    static func remote(_ record: RemoteHostRecord, _ status: RemoteHostStatus?, groupChoices: [String]) -> MacCardPresentation {
         let address = "\(record.host):\(record.port)"
         let state = status?.state ?? .connecting(attempt: 0)
         var failureText: String?
@@ -210,7 +256,9 @@ extension MacCardPresentation {
             failureText: failureText,
             sampleText: status?.snapshot.map { TimeText.sampled($0.capturedAt, current: isOnline) },
             metrics: status?.snapshot.map(MetricTiles.all) ?? [],
-            actions: actions
+            actions: actions,
+            group: record.group,
+            groupChoices: groupChoices
         )
     }
 }
@@ -293,6 +341,8 @@ enum PairingProblemWording {
             "The port must be a number from 1 to 65535."
         case .clientID:
             "The client ID can use letters, digits, dots, underscores, and hyphens, up to 64 characters."
+        case .group:
+            "Group names can be up to \(RemoteHostRecord.maximumGroupLength) characters."
         case .secret:
             "The client secret must be the base64 text that `macfleet-headless credential add` printed."
         case let .limitReached(limit):
