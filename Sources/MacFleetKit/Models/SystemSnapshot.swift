@@ -20,6 +20,9 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
     public let physicalMemoryBytes: UInt64
     public let uptimeSeconds: TimeInterval
     public let loadAverage: LoadAverage
+    public let cpu: MetricReading<CPUUtilization>
+    public let memory: MetricReading<MemoryUsage>
+    public let memoryPressure: MetricReading<MemoryPressureLevel>
 
     public init(
         capturedAt: Date,
@@ -28,7 +31,10 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
         activeProcessorCount: Int,
         physicalMemoryBytes: UInt64,
         uptimeSeconds: TimeInterval,
-        loadAverage: LoadAverage
+        loadAverage: LoadAverage,
+        cpu: MetricReading<CPUUtilization> = .unavailable(.notSampled),
+        memory: MetricReading<MemoryUsage> = .unavailable(.notSampled),
+        memoryPressure: MetricReading<MemoryPressureLevel> = .unavailable(.notSampled)
     ) {
         self.capturedAt = capturedAt
         self.hostName = hostName
@@ -37,5 +43,8 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
         self.physicalMemoryBytes = physicalMemoryBytes
         self.uptimeSeconds = uptimeSeconds
         self.loadAverage = loadAverage
+        self.cpu = cpu
+        self.memory = memory
+        self.memoryPressure = memoryPressure
     }
 }

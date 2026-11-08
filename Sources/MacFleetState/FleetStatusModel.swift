@@ -29,4 +29,16 @@ public final class FleetStatusModel {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Refreshes every `interval` until the calling task is cancelled.
+    public func runSampling(every interval: Duration) async {
+        while !Task.isCancelled {
+            await refresh()
+            do {
+                try await Task.sleep(for: interval)
+            } catch {
+                return
+            }
+        }
+    }
 }

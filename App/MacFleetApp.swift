@@ -11,8 +11,11 @@ struct MacFleetApp: App {
     )
 
     var body: some Scene {
-        MenuBarExtra("MacFleet", systemImage: "server.rack") {
+        MenuBarExtra {
             StatusPopoverView(model: model)
+        } label: {
+            Image(systemName: "server.rack")
+                .task { await model.runSampling(every: .seconds(2)) }
         }
         .menuBarExtraStyle(.window)
     }

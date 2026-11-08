@@ -2,7 +2,10 @@ import Foundation
 import MacFleetKit
 
 func run() async throws {
-    let snapshot = try await ProcessSystemMetricsProvider().snapshot()
+    let provider = ProcessSystemMetricsProvider()
+    _ = try await provider.snapshot()
+    try await Task.sleep(for: .seconds(2))
+    let snapshot = try await provider.snapshot()
     FileHandle.standardOutput.write(try FleetWireFormat.encode(snapshot) + Data("\n".utf8))
 }
 

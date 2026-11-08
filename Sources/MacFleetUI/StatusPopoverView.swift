@@ -37,7 +37,7 @@ public struct StatusPopoverView: View {
             }
         }
         .padding()
-        .frame(width: 300)
+        .frame(width: 320)
         .task { await model.refresh() }
     }
 }
@@ -50,10 +50,15 @@ private struct SystemSummaryView: View {
             LabeledContent("Host", value: snapshot.hostName)
             LabeledContent("OS", value: snapshot.operatingSystemVersion)
             LabeledContent("CPUs", value: "\(snapshot.activeProcessorCount)")
-            LabeledContent(
-                "Memory",
-                value: Int64(snapshot.physicalMemoryBytes).formatted(.byteCount(style: .memory))
-            )
+            LabeledContent("CPU", value: snapshot.cpu.text { percent($0.total) })
+            LabeledContent("Cores", value: snapshot.cpu.text { cpu in cpu.perCore.text { cores in
+                cores.map { percent($0) }.joined(separator: " ")
+            } })
+            LabeledContent("Memory", value: snapshot.memory.text { memory in
+                "\(bytes(memory.usedBytes)) used of \(bytes(memory.totalBytes))"
+            })
+            LabeledContent("Available", value: snapshot.memory.text { bytes($0.availableBytes) })
+            LabeledContent("Pressure", value: snapshot.memoryPressure.text { $0.title })
             LabeledContent(
                 "Uptime",
                 value: Duration.seconds(snapshot.uptimeSeconds)
@@ -66,4 +71,33 @@ private struct SystemSummaryView: View {
         }
         .font(.callout)
     }
+}
+
+extension MetricReading {
+    fileprivate func text(_ format: (Value) -> String) -> String {
+        switch self {
+        case let .available(value):
+            format(value)
+        case let .unavailable(issue):
+            issue.errorDescription ?? "Unavailable"
+        }
+    }
+}
+
+extension MemoryPressureLevel {
+    fileprivate var title: String {
+        switch self {
+        case .normal: "Normal"
+        case .warning: "Warning"
+        case .critical: "Critical"
+        }
+    }
+}
+
+private func percent(_ fraction: Double) -> String {
+    fraction.formatted(.percent.precision(.fractionLength(0)))
+}
+
+private func bytes(_ value: UInt64) -> String {
+    Int64(value).formatted(.byteCount(style: .memory))
 }

@@ -29,6 +29,8 @@ Extend this file with the project's language-specific architecture and verificat
 - Testability: depend on protocols (`SystemMetricsProviding`, `SnapshotStoring`) and inject them. Provide mock implementations for tests and previews. Never call real system APIs from application state.
 - Preservation: when changing behavior, keep existing public APIs and tests passing unless a change is explicitly requested. Add tests for new behavior.
 - Resource cleanup: bound in-memory collections, cancel or await asynchronous work that the UI started, and avoid timers or observers that outlive their owner.
+- Unavailable data: model it explicitly with `MetricReading` and a `MetricIssue`. Never report 0 for a value that could not be read, and keep failures independent across metrics.
+- Counters: derive rates from deltas between samples. Use wrapping arithmetic for 32-bit kernel counters and treat backwards jumps as resets.
 - Verification reporting: report exactly which commands ran and their results. If Xcode or the Swift toolchain cannot run in the environment, say so and list what was not verified. Never claim a build or test passed without running it.
 
 ## Verification commands

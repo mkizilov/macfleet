@@ -34,3 +34,32 @@ struct FleetStatusModelTests {
         #expect(model.errorMessage == MetricsError.loadAverageUnavailable.errorDescription)
     }
 }
+
+private actor CountingProvider: SystemMetricsProviding {
+    private(set) var calls = 0
+
+    func snapshot() async throws -> SystemSnapshot {
+        calls += 1
+        return MockSystemMetricsProvider.sampleSnapshot
+    }
+}
+
+@MainActor
+@Suite("Fleet status sampling loop")
+struct FleetStatusSamplingTests {
+    @Test func samplingRefreshesUntilCancelled() async throws {
+        let provider = CountingProvider()
+        let model = FleetStatusModel(provider: provider, store: InMemorySnapshotStore())
+
+        let task = Task { await model.runSampling(every: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(60))
+        task.cancel()
+        await task.value
+
+        let calls = await provider.calls
+        #expect(calls >= 1)
+        #expect(model.snapshot == MockSystemMetricsProvider.sampleSnapshot)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await provider.calls == calls)
+    }
+}
