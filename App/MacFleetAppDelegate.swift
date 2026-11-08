@@ -7,14 +7,18 @@ import MacFleetState
 final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
     let model: FleetStatusModel
     let processes = ProcessMonitorModel(monitor: ProcessMonitor())
+    let alerts: AlertCenterModel
     private var powerObservers: [NSObjectProtocol] = []
 
     override init() {
         let storage = HistoryStorage.open()
+        let alerts = AlertCenterModel(notifier: UserNotificationAlertNotifier(), store: UserDefaultsAlertSettingsStore())
+        self.alerts = alerts
         model = FleetStatusModel(
             engine: SamplingEngine(provider: ProcessSystemMetricsProvider(), store: storage.store),
             historySource: storage.history,
-            startupNotice: storage.notice
+            startupNotice: storage.notice,
+            alerts: alerts
         )
         super.init()
     }

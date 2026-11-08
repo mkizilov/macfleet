@@ -11,10 +11,11 @@ struct MacFleetApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            StatusPopoverView(model: appDelegate.model) {
-                openWindow(id: "processes")
-                NSApplication.shared.activate()
-            }
+            StatusPopoverView(
+                model: appDelegate.model,
+                onShowProcesses: { showWindow("processes") },
+                onShowAlerts: { showWindow("alerts") }
+            )
         } label: {
             MenuBarLabelView(presentation: appDelegate.model.dashboard?.menuBar)
                 .task { await appDelegate.model.runSampling(every: .background) }
@@ -24,6 +25,15 @@ struct MacFleetApp: App {
         Window("Processes", id: "processes") {
             ProcessWindowContent(model: appDelegate.processes)
         }
+
+        Window("Alert Settings", id: "alerts") {
+            AlertSettingsWindowContent(model: appDelegate.alerts)
+        }
+    }
+
+    private func showWindow(_ id: String) {
+        openWindow(id: id)
+        NSApplication.shared.activate()
     }
 }
 
@@ -43,5 +53,24 @@ private struct ProcessWindowContent: View {
         )
         .onAppear { model.processesDidAppear() }
         .onDisappear { Task { await model.processesDidDisappear() } }
+    }
+}
+
+/// Connects the alert settings window to its model. The permission is read again when the window opens, because the
+/// user may have changed it in System Settings since.
+private struct AlertSettingsWindowContent: View {
+    let model: AlertCenterModel
+
+    var body: some View {
+        AlertSettingsView(
+            presentation: model.presentation,
+            onEnabled: { metric, enabled in MainActor.assumeIsolated { model.setEnabled(metric, enabled) } },
+            onThreshold: { metric, value in MainActor.assumeIsolated { model.setThreshold(metric, value) } },
+            onSustained: { metric, seconds in MainActor.assumeIsolated { model.setSustainedSeconds(metric, seconds) } },
+            onCooldown: { metric, seconds in MainActor.assumeIsolated { model.setCooldownSeconds(metric, seconds) } },
+            onRequestPermission: { Task { await model.requestPermission() } },
+            onReset: { MainActor.assumeIsolated { model.resetToDefaults() } }
+        )
+        .onAppear { Task { await model.refreshPermission() } }
     }
 }

@@ -16,18 +16,21 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetKit/Metrics` | CPU, memory, storage, and network calculations; Mach, FileManager, and getifaddrs/sysctl sources; metric providers; mocks; the simulated timeline |
 | `Sources/MacFleetKit/Storage` | Bounded in-memory snapshot store |
 | `Sources/MacFleetKit/Processes` | Process listing through libproc, permission-aware readings, CPU windows, and sorting, search, totals, and grouping |
+| `Sources/MacFleetKit/Alerts` | Alert metrics, settings and their persistence, notification permission and delivery (`UserNotificationAlertNotifier`), and recording mocks |
 | `Sources/MacFleetKit/Networking` | Wire format for snapshots (no transport yet) |
 | `Sources/MacFleetState/History` | Bounded metric history for charts (`MetricHistory`) |
 | `Sources/MacFleetState/Presentation` | Presentation models: display values, spoken wording, usage levels, chart data. No SwiftUI |
 | `Sources/MacFleetState/Processes` | `ProcessMonitorModel`: samples processes only while the Processes window is open |
+| `Sources/MacFleetState/Alerts` | `AlertEngine` (sustained periods, hysteresis, cooldown, sleep handling) and `AlertCenterModel` (settings, permission, notices) |
 | `Sources/MacFleetState` | `FleetStatusModel`: sampling loop, selection, history, and the dashboard presentation |
 | `Sources/MacFleetUI/Components` | Reusable views: section card, gauge, sparkline chart, readout row, level badge, colors |
 | `Sources/MacFleetUI/Dashboard` | Section cards and the dashboard content view |
 | `Sources/MacFleetUI` | Popover (`StatusPopoverView`), menu bar label (`MenuBarLabelView`) |
 | `Sources/MacFleetUI/Processes` | The Processes window's view (`ProcessMonitorView`) |
+| `Sources/MacFleetUI/Alerts` | The Alert Settings window's view (`AlertSettingsView`) |
 | `Sources/MacFleetUI/Previews` | Preview providers fed by the simulated timeline |
 | `Sources/MacFleetAgent` | Command-line agent target |
-| `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`) and the Processes window |
+| `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`), the Processes window, and the Alert Settings window |
 | `MacFleet.xcodeproj` | Xcode application project with Debug and Release configurations |
 | `Tests/` | Swift Testing suites for the kit and the state layer |
 | `scripts/swiftc-verify.sh` | Verified build, test, and agent-run pipeline using `swiftc` only |
@@ -366,6 +369,46 @@ The listing runs on the monitor actor, off the main thread. At this process coun
 - CPU shows "Waiting for a second sample" on every row for the first two seconds.
 - The CPU check used one busy child process. Other processes were not compared with another tool.
 
+## Alerts
+
+Alerts announce a resource condition with a native notification. Each alert is configured in the **Alert Settings** window, opened from **Windows** in the popover. Every sample is evaluated, including while the popover is closed, so alerts run whenever the app runs.
+
+| Alert | Measured as | Default threshold | Fires at | Clears only past |
+| --- | --- | --- | --- | --- |
+| High CPU use | total CPU, percent | 90% | 90% or more | 85% (5-point band) |
+| Memory pressure | system pressure level | Critical | Critical | below Critical |
+| Low disk space | free share of each browsable, monitored volume | 10% free | 10% free or less | above 12% free (2-point band) |
+| High network use | download plus upload across monitored interfaces | 50 MB/s | 50 MB/s or more | below 40 MB/s (80% of threshold) |
+| Thermal pressure | `ProcessInfo` thermal state | Serious | Serious or worse | below Serious |
+
+Each alert has its own enable switch, threshold, sustained period, and cooldown. Ranges: CPU 50–100%, memory level 1–2, free disk space 1–50%, network 1–1,000 MB/s, thermal level 1–3. Sustained period 0–600 s, default 30 s. Cooldown 60–3,600 s, default 15 minutes.
+
+- **Sustained period.** The condition must hold for the period, measured with each sample's capture time. Samples arrive every 10 seconds with the popover closed and every 2 seconds with it open, so the period resolves to the sample interval.
+- **Hysteresis.** An active alert clears only when the reading passes the band in the table. Pressure and thermal states are discrete, so their band is the level itself.
+- **Cooldown.** At most one notice per alert in each cooldown. A notice that comes due during the cooldown waits, and is sent when the cooldown ends if the alert is still firing. If the alert clears first, the waiting notice is dropped. An alert that re-enters within the cooldown waits for it in the same way.
+- **One notice per episode.** Clearing sends no notice. A new episode is announced only after its sustained period and the cooldown.
+- **Sleep.** A gap of more than 60 seconds between samples restarts any sustained period. No period counts across sleep.
+- **Unavailable readings.** They never clear an active alert and are never read as zero. They break a sustained period in progress.
+- **Per volume.** Each browsable, monitored volume has its own disk alert, and an alert ends when its volume is gone or unmonitored.
+- **Permission.** The app never asks for notification permission at launch or when an alert is enabled. Only the **Allow Notifications** button asks, through `UNUserNotificationCenter.requestAuthorization`. Without permission, nothing is posted, but the settings window still shows the last alert. A repeated alert replaces its earlier notification rather than stacking.
+- **Storage.** Settings are saved at once as one encoded value under the `MacFleet.alertSettings` key in user defaults. Unreadable saved data falls back to the defaults, and the settings window says so. Values are clamped into their ranges on every change and on load.
+
+### Tests
+
+- **Settings.** Ranges and clamping, non-finite values, JSON round trip, files that omit metrics, unknown metric names, damaged data, and a user-defaults round trip in a throwaway suite.
+- **Engine, with a simulated clock and synthetic streams.** Sustained periods, restart after one sample below the threshold, the hysteresis band, cooldown deferral and dropping, a new episode after the cooldown, unavailable readings, a sleep gap, disabling, per-volume alerts, unmonitored volumes, the network total with a missing interface, memory and thermal levels, and a 4,000-second swinging load replayed twice. The replay gives the same notices, and consecutive notices are at least one cooldown apart.
+- **Model.** Settings persist into a new model, values are clamped, switches are per metric, unreadable and unsaved settings are reported, permission is read without asking and requested only on request, nothing is posted without permission, posted notices carry their message and cooldown, and a failed post is reported.
+- **Status model.** A sustained breach reaches the notifier through the normal refresh path.
+- **Presentation.** Row order and labels, status words, timing wording, notification wording, and the last-alert line.
+
+### Limitations
+
+- Notification delivery was not run. The app is not bundled here, so `UserNotificationAlertNotifier` compiles and is covered by its status mapping, but the permission prompt and banners were not seen.
+- The Alert Settings window and the Windows menu were typechecked, not rendered.
+- No notice is sent when an alert clears. Recovery notices were left out to keep notifications rare.
+- Hysteresis margins are fixed in code, not settings. A sustained period is only as precise as the sample interval.
+- The engine's cost per sample was not measured.
+
 ## Verified commands
 
 Run from the repository root.
@@ -384,7 +427,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 328 Swift Testing tests in 81 suites passed (33 of them cover processes), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 375 Swift Testing tests in 93 suites passed (33 of them cover processes and 47 cover alerts), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -400,6 +443,7 @@ The test suites cover:
 - Simulated metrics: determinism, physical ranges, growing counters, the deliberate CPU gap, and default exclusions.
 - The monitoring selection, its JSON round trip, and the model: dashboard built on refresh, history capacity, source toggles that rebuild immediately, and the expanded state.
 - The sampling loop, which stops when cancelled.
+- Alerts: settings values and persistence, the engine's sustained periods, hysteresis, cooldown, sleep and unavailable handling with a simulated clock, the model's permission and posting paths, the status model's path, and the presentation wording (see Alerts).
 - Processes: aggregation, sorting, search, and totals; the monitor's CPU windows, counter resets, exits during collection, PID reuse, and denied and failed listings; a live listing of this process and a busy-loop CPU check; presentation wording; and the model's sampling lifecycle.
 
 ## Responsiveness measurement
@@ -463,7 +507,7 @@ The app target needs Xcode because SwiftUI's `@State` macro plugin ships only wi
 
 The menu bar label starts a sampling loop that refreshes every two seconds. Opening the popover or pressing Refresh also samples.
 
-Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, the Sources toggles, and the Processes window (its opening, layout, and sampling stopping when it closes). The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
+Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, the Sources toggles, the Processes window (its opening, layout, and sampling stopping when it closes), and the Alert Settings window, its Windows menu, and notifications appearing on screen. The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
 
 ## Run the agent
 
@@ -485,6 +529,7 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 - Usage is shown as Elevated from 75% and Critical from 90%, for CPU, memory, and disks alike. Pressure maps warning to elevated and critical to critical.
 - Not included: interface MAC addresses, IPv6 addresses, wireless details, per-volume I/O throughput, and per-process network use.
 - The Xcode project has no test targets. Tests run through `scripts/swiftc-verify.sh` or `swift test`.
+- Alert settings live in user defaults under `MacFleet.alertSettings`, not in a file, so they are per user account on this Mac. The alert hysteresis margins and the sustained and cooldown limits are fixed in code and in `AlertRule`.
 - The Xcode project file is hand-written. It passes `plutil -lint`, but Xcode has not opened it here.
 - Snapshot JSON has gained `cpu`, `memory`, `memoryPressure`, `volumes`, `network`, and `hardware` fields. Payloads from earlier builds without them no longer decode. No deployed consumers existed.
 - `snapshot()` changed to `snapshot(selection:)` as the protocol requirement. The no-argument form remains as a convenience, so existing call sites are unchanged.

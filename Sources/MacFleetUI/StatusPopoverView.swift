@@ -6,10 +6,16 @@ import SwiftUI
 public struct StatusPopoverView: View {
     private let model: FleetStatusModel
     private let onShowProcesses: () -> Void
+    private let onShowAlerts: () -> Void
 
-    public init(model: FleetStatusModel, onShowProcesses: @escaping () -> Void) {
+    public init(
+        model: FleetStatusModel,
+        onShowProcesses: @escaping () -> Void,
+        onShowAlerts: @escaping () -> Void
+    ) {
         self.model = model
         self.onShowProcesses = onShowProcesses
+        self.onShowAlerts = onShowAlerts
     }
 
     public var body: some View {
@@ -76,8 +82,11 @@ public struct StatusPopoverView: View {
             }
             .accessibilityHint(model.isShowingDetails ? "Collapses the graphs and details" : "Expands the graphs and details")
             Spacer()
-            Button("Processes", action: onShowProcesses)
-                .accessibilityHint("Opens the process list in its own window")
+            Menu("Windows") {
+                Button("Processes", action: onShowProcesses)
+                Button("Alerts", action: onShowAlerts)
+            }
+            .fixedSize()
             Button("Refresh") {
                 Task { await model.refresh() }
             }
