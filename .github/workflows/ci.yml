@@ -12,10 +12,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The scripts are verified against the Command Line Tools toolchain. Pin every job to it, so `swiftc`, `xcrun`, the SDK,
+# and the Swift Testing framework all come from one place. The identity tests need macOS 15, so the runners are macOS 15.
+env:
+  DEVELOPER_DIR: /Library/Developer/CommandLineTools
+
 jobs:
   static:
     name: Release files
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Check scripts, property lists, and version settings
@@ -23,44 +28,64 @@ jobs:
 
   test:
     name: Build and test
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm the toolchain
+        run: |
+          test -x "$DEVELOPER_DIR/usr/bin/swiftc" || { echo "No Command Line Tools at $DEVELOPER_DIR on this runner."; exit 1; }
+          swift --version
       - name: Build and run every suite
-        run: sh scripts/swiftc-verify.sh
+        run: |
+          mkdir -p .agent-local
+          sh scripts/swiftc-verify.sh > .agent-local/verify.log 2>&1
+      - name: Show the end of the verify log after a failure
+        if: failure()
+        run: tail -n 80 .agent-local/verify.log
       - name: Keep the verify log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: verify-log
           path: .agent-local/verify.log
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
   performance:
     name: Performance budgets
-    runs-on: macos-14
+    runs-on: macos-15
     needs: test
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm the toolchain
+        run: |
+          test -x "$DEVELOPER_DIR/usr/bin/swiftc" || { echo "No Command Line Tools at $DEVELOPER_DIR on this runner."; exit 1; }
       - name: Run the benchmarks against the budgets
-        run: sh scripts/performance-check.sh | tee performance.log
+        run: |
+          mkdir -p .agent-local
+          sh scripts/performance-check.sh > .agent-local/performance.log 2>&1
+      - name: Show the budgets
+        if: always()
+        run: sed -n '/== budgets/,$p' .agent-local/performance.log || true
       - name: Keep the performance log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: performance-log
-          path: performance.log
-          if-no-files-found: ignore
+          path: .agent-local/performance.log
+          if-no-files-found: warn
 
   package:
     name: Package with ad hoc signing
-    runs-on: macos-14
+    runs-on: macos-15
     needs: test
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm the toolchain
+        run: |
+          test -x "$DEVELOPER_DIR/usr/bin/swiftc" || { echo "No Command Line Tools at $DEVELOPER_DIR on this runner."; exit 1; }
       - name: Build the packages
         run: sh scripts/package-app.sh
       - name: Check the checksums

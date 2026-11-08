@@ -139,6 +139,16 @@ struct ReleaseMetadataTests {
         }
     }
 
+    /// The CI workflow runs on macOS 15, where the identity tests can pass, and pins the toolchain the scripts are verified
+    /// against. No step pipes a script into `tee`, because a pipe would report the status of `tee` and hide a failed budget.
+    @Test func theCIWorkflowRunsOnMacOS15WithThePinnedToolchainAndKeepsExitStatus() throws {
+        let workflow = try repositoryText(".github/workflows/ci.yml")
+        #expect(!workflow.contains("macos-14"), "the identity tests need macOS 15")
+        #expect(workflow.contains("runs-on: macos-15"))
+        #expect(workflow.contains("DEVELOPER_DIR: /Library/Developer/CommandLineTools"))
+        #expect(!workflow.contains("| tee"), "a pipe into tee hides the exit status of the script")
+    }
+
     @Test func theVersionDescriptionNamesTheVersion() {
         #expect(MacFleetVersion.description.contains(MacFleetVersion.marketing))
         #expect(MacFleetVersion.description.contains("remote protocol 1.0"))

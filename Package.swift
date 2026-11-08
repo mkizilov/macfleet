@@ -17,7 +17,7 @@ let package = Package(
         .target(name: "MacFleetUI", dependencies: ["MacFleetState"]),
         .executableTarget(name: "MacFleetAgent", dependencies: ["MacFleetKit"]),
         .executableTarget(name: "MacFleetHeadless", dependencies: ["MacFleetKit"]),
-        .testTarget(name: "MacFleetKitTests", dependencies: ["MacFleetKit"]),
+        .testTarget(name: "MacFleetKitTests", dependencies: ["MacFleetKit"], exclude: ["Fixtures"]),
         .testTarget(name: "MacFleetStateTests", dependencies: ["MacFleetState"]),
     ]
 )
