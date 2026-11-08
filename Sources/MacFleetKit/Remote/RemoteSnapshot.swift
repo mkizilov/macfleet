@@ -80,6 +80,21 @@ public struct RemoteSnapshot: Codable, Equatable, Sendable {
         loadAverage = .available(snapshot.loadAverage)
     }
 
+    /// The same readings stamped with another time. History and alerts use the time the app received a sample, so the
+    /// host's clock never decides their timeline.
+    public func withCapturedAt(_ time: Date) -> RemoteSnapshot {
+        RemoteSnapshot(
+            capturedAt: time,
+            cpuTotal: cpuTotal,
+            memory: memory,
+            memoryPressure: memoryPressure,
+            storage: storage,
+            network: network,
+            thermal: thermal,
+            loadAverage: loadAverage
+        )
+    }
+
     /// One capability per metric, in `RemoteMetric.allCases` order. A measurement is supported when this sample read it.
     public var capabilities: [RemoteCapability] {
         [

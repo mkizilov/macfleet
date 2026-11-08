@@ -91,6 +91,9 @@ public final class FleetOverviewModel {
     private var probeTask: Task<Void, Never>?
     private var recordsWritable = true
     private var started = false
+    private var lastEvaluated: [UUID: Date] = [:]
+    private let history: (any FleetHistoryStoring)?
+    private let hostAlerts: HostAlertCenter?
 
     public init(
         store: any RemoteHostStoring,
@@ -98,7 +101,9 @@ public final class FleetOverviewModel {
         opener: any RemoteSessionOpening,
         prober: any RemoteHostProbing,
         scheduling: RemoteScheduling = .live,
-        backoff: RemoteBackoff = .standard
+        backoff: RemoteBackoff = .standard,
+        history: (any FleetHistoryStoring)? = nil,
+        hostAlerts: HostAlertCenter? = nil
     ) {
         self.store = store
         self.secrets = secrets
@@ -106,6 +111,8 @@ public final class FleetOverviewModel {
         self.prober = prober
         self.scheduling = scheduling
         self.backoff = backoff
+        self.history = history
+        self.hostAlerts = hostAlerts
         presentation = FleetOverviewPresentation(
             local: nil,
             records: [],
@@ -239,7 +246,15 @@ public final class FleetOverviewModel {
         Task { [self] in await restart(record) }
     }
 
-    /// Stops watching a Mac and forgets its identity and secret.
+    /// The sources the history can show: this Mac, then every registered Mac.
+    public var historyIdentities: [HistoryHostIdentity] {
+        [HistoryHostIdentity(id: .local, label: "This Mac")] + records.map {
+            HistoryHostIdentity(id: .remote($0.id), label: $0.label)
+        }
+    }
+
+    /// Stops watching a Mac, forgets its identity and secret, and deletes its history and alert settings. A Mac's history
+    /// belongs to its pairing, so it does not outlive it.
     public func remove(_ id: UUID) {
         guard let record = records.first(where: { $0.id == id }) else { return }
         guard recordsWritable else {
@@ -257,12 +272,22 @@ public final class FleetOverviewModel {
         }
         records = remaining
         statuses[id] = nil
+        lastEvaluated[id] = nil
         do {
             try secrets.removeSecret(for: Self.account(id))
         } catch {
             notice = "The client secret for \(record.label) could not be removed: \(error.localizedDescription)"
         }
-        Task { [self] in await stopWatching(id) }
+        hostAlerts?.remove(.remote(id))
+        Task { [self] in
+            await stopWatching(id)
+            do {
+                _ = try await history?.removeHistory(for: .remote(id))
+            } catch {
+                notice = "The history for \(record.label) could not be deleted. \(error.localizedDescription)"
+                rebuild()
+            }
+        }
         rebuild()
     }
 
@@ -398,7 +423,8 @@ public final class FleetOverviewModel {
             opener: opener,
             interval: Self.remoteSampleInterval,
             backoff: backoff,
-            scheduling: scheduling
+            scheduling: scheduling,
+            history: history
         )
         watchers[id] = watcher
         consumers[id] = Task { [weak self] in
@@ -422,8 +448,13 @@ public final class FleetOverviewModel {
     }
 
     private func apply(_ status: RemoteHostStatus) {
-        guard records.contains(where: { $0.id == status.hostID }) else { return }
+        guard let record = records.first(where: { $0.id == status.hostID }) else { return }
         statuses[status.hostID] = status
+        // A status is published for each state change, so the same reading can arrive twice. It is evaluated once.
+        if let snapshot = status.snapshot, let received = status.receivedAt, lastEvaluated[record.id] != received {
+            lastEvaluated[record.id] = received
+            hostAlerts?.evaluate(host: .remote(record.id), label: record.label, snapshot: snapshot, receivedAt: received)
+        }
         rebuild()
     }
 

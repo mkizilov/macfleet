@@ -327,11 +327,12 @@ struct HeadlessAgentIntegrationTests {
     @Test func aClientBoundToThePinnedFingerprintRejectsAnotherHost() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let agent = try fixture.agent(fixture.configuration(port: 21432))
+        // 21432 is held by an unrelated service on this Mac, so this test uses the next free port in the range.
+        let agent = try fixture.agent(fixture.configuration(port: 21433))
         try await withAgent(agent) { _ in
             let wrong = HostFingerprint(certificateDER: Data("some other host".utf8))
             do {
-                _ = try await snapshots(1, from: fixture.client(port: 21432, pin: wrong))
+                _ = try await snapshots(1, from: fixture.client(port: 21433, pin: wrong))
                 Issue.record("a client must not trust a host it did not pin")
             } catch {
                 // Expected: the TLS verify block refuses the certificate.

@@ -8,17 +8,20 @@ public struct StatusPopoverView: View {
     private let onShowProcesses: () -> Void
     private let onShowAlerts: () -> Void
     private let onShowFleet: () -> Void
+    private let onShowHistory: () -> Void
 
     public init(
         model: FleetStatusModel,
         onShowProcesses: @escaping () -> Void,
         onShowAlerts: @escaping () -> Void,
-        onShowFleet: @escaping () -> Void
+        onShowFleet: @escaping () -> Void,
+        onShowHistory: @escaping () -> Void
     ) {
         self.model = model
         self.onShowProcesses = onShowProcesses
         self.onShowAlerts = onShowAlerts
         self.onShowFleet = onShowFleet
+        self.onShowHistory = onShowHistory
     }
 
     public var body: some View {
@@ -87,6 +90,7 @@ public struct StatusPopoverView: View {
             Spacer()
             Menu("Windows") {
                 Button("Fleet", action: onShowFleet)
+                Button("History", action: onShowHistory)
                 Button("Processes", action: onShowProcesses)
                 Button("Alerts", action: onShowAlerts)
             }

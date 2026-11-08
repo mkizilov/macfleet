@@ -181,7 +181,8 @@ struct HistoryStoreAggregationTests {
 
             let now = origin + Double(count) * 10
             await store.maintain(now: now)
-            let horizon = floor(now / 300) * 300
+            // A bucket is rolled up once it has been closed for the grace period.
+            let horizon = floor((now - MetricHistoryStore.closeGrace) / 300) * 300
             let stored = try await store.points(
                 in: .fiveMinute,
                 from: Date(timeIntervalSince1970: 0),
@@ -312,7 +313,13 @@ struct HistoryStoreRetentionTests {
                 hourly: HistoryRetention.minimumHourly
             )
             let reopened = try openStore(directory, retention: shortRetention, configuration: quietConfiguration(), now: laterOpen)
-            #expect(try await reopened.rowCount(.raw).points == 0)
+            // The newest five-minute bucket stays open until the next sample closes it, so its points are kept. Every point
+            // before it is past retention and rolled up, so it is pruned.
+            let newest = origin + 490
+            let openStart = floor((newest - MetricHistoryStore.closeGrace) / 300) * 300
+            let remaining = try await reopened.points(in: .raw, from: .distantPast, to: .distantFuture).map(\.start)
+            #expect(remaining == (0..<50).map { origin + Double($0) * 10 }.filter { $0 >= openStart })
+            #expect(!remaining.isEmpty)
         }
     }
 }
@@ -408,8 +415,8 @@ struct HistoryStoreRecoveryTests {
             let connection = try SQLiteDatabase(path: file.path)
             try connection.execute("BEGIN IMMEDIATE")
             try connection.execute("""
-                INSERT INTO points (tier, start, samples, cpu_sum, cpu_n, cpu_max, mem_sum, mem_n, mem_max, rx_sum, rx_n, rx_max, tx_sum, tx_n, tx_max)
-                VALUES (0, \(origin + 10), 1, 0.5, 1, 0.5, 0, 0, NULL, 0, 0, NULL, 0, 0, NULL)
+                INSERT INTO points (host, tier, start, samples, cpu_sum, cpu_n, cpu_max, mem_sum, mem_n, mem_max, rx_sum, rx_n, rx_max, tx_sum, tx_n, tx_max)
+                VALUES ('local', 0, \(origin + 10), 1, 0.5, 1, 0.5, 0, 0, NULL, 0, 0, NULL, 0, 0, NULL)
                 """)
             connection.close()
 

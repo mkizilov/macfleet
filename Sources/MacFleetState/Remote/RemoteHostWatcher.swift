@@ -53,6 +53,8 @@ public actor RemoteHostWatcher {
     private let interval: SamplingInterval
     private let backoff: RemoteBackoff
     private let scheduling: RemoteScheduling
+    private let history: (any RemoteHistorySink)?
+    private let historyID: HistoryHostID
     private var task: Task<Void, Never>?
     private var isStopped = false
     private var failures = 0
@@ -63,9 +65,12 @@ public actor RemoteHostWatcher {
         opener: any RemoteSessionOpening,
         interval: SamplingInterval = SamplingInterval(seconds: 5),
         backoff: RemoteBackoff = .standard,
-        scheduling: RemoteScheduling = .live
+        scheduling: RemoteScheduling = .live,
+        history: (any RemoteHistorySink)? = nil
     ) {
         hostID = target.record.id
+        historyID = .remote(target.record.id)
+        self.history = history
         let stream = AsyncStream.makeStream(of: RemoteHostStatus.self, bufferingPolicy: .bufferingNewest(8))
         statuses = stream.stream
         continuation = stream.continuation
@@ -108,7 +113,7 @@ public actor RemoteHostWatcher {
             do {
                 let updates = await opener.open(target, interval: interval)
                 for try await update in updates {
-                    apply(update)
+                    await apply(update)
                 }
                 failure = .closed
             } catch {
@@ -132,7 +137,9 @@ public actor RemoteHostWatcher {
         }
     }
 
-    private func apply(_ update: RemoteUpdate) {
+    /// Publishes a session update. A snapshot is also handed to the history, in the order it arrived, so each host's
+    /// rows come from one sequence and never interleave with another host's.
+    private func apply(_ update: RemoteUpdate) async {
         switch update {
         case let .connected(info):
             failures = 0
@@ -145,14 +152,16 @@ public actor RemoteHostWatcher {
                 receivedAt: current.receivedAt
             )
         case let .snapshot(snapshot):
+            let received = scheduling.now()
             current = RemoteHostStatus(
                 hostID: hostID,
                 state: .online,
                 hostName: current.hostName,
                 capabilities: current.capabilities,
                 snapshot: snapshot,
-                receivedAt: scheduling.now()
+                receivedAt: received
             )
+            _ = await history?.ingest(snapshot, from: historyID, receivedAt: received)
         }
         continuation.yield(current)
     }

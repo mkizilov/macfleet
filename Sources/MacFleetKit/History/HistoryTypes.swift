@@ -6,6 +6,15 @@ public enum HistoryTier: Int, CaseIterable, Sendable {
     case fiveMinute = 1
     case hourly = 2
 
+    /// A name for exports and messages.
+    public var label: String {
+        switch self {
+        case .raw: "raw"
+        case .fiveMinute: "five-minute"
+        case .hourly: "hourly"
+        }
+    }
+
     /// Bucket width in seconds. Raw points are not bucketed.
     var width: Int {
         switch self {
@@ -106,6 +115,26 @@ public struct HistoryPoint: Equatable, Sendable {
             start: snapshot.capturedAt.timeIntervalSince1970,
             samples: 1,
             cpu: MetricAggregate(value: snapshot.cpu.availableValue?.total),
+            memory: MetricAggregate(value: snapshot.memory.availableValue?.usedFraction),
+            download: MetricAggregate(value: rate?.receivedPerSecond),
+            upload: MetricAggregate(value: rate?.sentPerSecond),
+            volumes: Dictionary(disks, uniquingKeysWith: { first, _ in first })
+        )
+    }
+
+    /// A point from a remote Mac. It is placed at `start`, the time the app received the sample, so the remote clock never
+    /// sets the timeline.
+    public init(remote snapshot: RemoteSnapshot, start: TimeInterval) {
+        let rate = AggregateNetworkRate.rate(snapshot.network)
+        let disks = (snapshot.storage.availableValue ?? [])
+            .filter(\.isBrowsable)
+            .compactMap { volume in
+                volume.capacity.availableValue.map { (volume.mountPoint, MetricAggregate(value: $0.utilization)) }
+            }
+        self.init(
+            start: start,
+            samples: 1,
+            cpu: MetricAggregate(value: snapshot.cpuTotal.availableValue),
             memory: MetricAggregate(value: snapshot.memory.availableValue?.usedFraction),
             download: MetricAggregate(value: rate?.receivedPerSecond),
             upload: MetricAggregate(value: rate?.sentPerSecond),

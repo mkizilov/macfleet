@@ -9,19 +9,26 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
     let processes = ProcessMonitorModel(monitor: ProcessMonitor())
     let alerts: AlertCenterModel
     let fleet: FleetOverviewModel
+    let history: FleetHistoryModel?
     private var powerObservers: [NSObjectProtocol] = []
 
     override init() {
         let storage = HistoryStorage.open()
         let alerts = AlertCenterModel(notifier: UserNotificationAlertNotifier(), store: UserDefaultsAlertSettingsStore())
+        let hostAlerts = HostAlertCenter(notifier: UserNotificationAlertNotifier(), store: UserDefaultsHostAlertSettingsStore())
         let fleet = FleetOverviewModel(
             store: UserDefaultsRemoteHostStore(),
             secrets: KeychainSecretStore(service: KeychainSecretStore.remoteService),
             opener: MetricsClientSessionOpener(),
-            prober: MetricsRemoteHostProber()
+            prober: MetricsRemoteHostProber(),
+            history: storage.fleet,
+            hostAlerts: hostAlerts
         )
         self.alerts = alerts
         self.fleet = fleet
+        history = storage.fleet.map { store in
+            FleetHistoryModel(store: store, identities: { fleet.historyIdentities }, hostAlerts: hostAlerts)
+        }
         model = FleetStatusModel(
             engine: SamplingEngine(provider: ProcessSystemMetricsProvider(), store: storage.store),
             historySource: storage.history,
@@ -70,24 +77,28 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
 private struct HistoryStorage {
     let store: any SnapshotStoring
     let history: (any HistorySource)?
+    /// The same store, for the multi-Mac history. Nil only when no store could be opened at all.
+    let fleet: (any FleetHistoryStoring)?
     let notice: String?
 
     static func open() -> HistoryStorage {
         do {
             let store = try MetricHistoryStore.open(at: try MetricHistoryStore.defaultLocation())
-            return HistoryStorage(store: store, history: store, notice: store.recoveryNote)
+            return HistoryStorage(store: store, history: store, fleet: store, notice: store.recoveryNote)
         } catch let fileError {
             do {
                 let memory = try MetricHistoryStore.inMemory()
                 return HistoryStorage(
                     store: memory,
                     history: memory,
+                    fleet: memory,
                     notice: "History is kept for this session only: \(fileError.localizedDescription)"
                 )
             } catch let memoryError {
                 return HistoryStorage(
                     store: InMemorySnapshotStore(),
                     history: nil,
+                    fleet: nil,
                     notice: "History is unavailable: \(fileError.localizedDescription) \(memoryError.localizedDescription)"
                 )
             }

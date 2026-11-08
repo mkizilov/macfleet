@@ -228,6 +228,7 @@ func runBenchmark(directory: String) async throws {
     print(String(format: "reopen (integrity check and upkeep): %.2f ms, recovery note: %@", milliseconds(reopenTime), reopened.recoveryNote ?? "none"))
     print(String(format: "file sizes: database %.2f MB, write-ahead log %.2f MB", Double(fileSize(file.path)) / 1_048_576, Double(fileSize(file.path + "-wal")) / 1_048_576))
     print(String(format: "resident memory: before %.1f MB, after writes %.1f MB", memoryBefore, memoryAfterWrites))
+    try await runFleetBenchmark(directory: directory)
 }
 
 /// Stages rows in a transaction and kills itself before COMMIT. The kill is the process's last act, so the file must
@@ -250,8 +251,8 @@ func runTornWriter(path: String) async throws {
     try connection.execute("BEGIN IMMEDIATE")
     for index in 0..<500 {
         try connection.execute("""
-            INSERT INTO points (tier, start, samples, cpu_sum, cpu_n, cpu_max, mem_sum, mem_n, mem_max, rx_sum, rx_n, rx_max, tx_sum, tx_n, tx_max)
-            VALUES (0, \(origin + 100_000 + Double(index) * 10), 1, 0.5, 1, 0.5, 0, 0, NULL, 0, 0, NULL, 0, 0, NULL)
+            INSERT INTO points (host, tier, start, samples, cpu_sum, cpu_n, cpu_max, mem_sum, mem_n, mem_max, rx_sum, rx_n, rx_max, tx_sum, tx_n, tx_max)
+            VALUES ('local', 0, \(origin + 100_000 + Double(index) * 10), 1, 0.5, 1, 0.5, 0, 0, NULL, 0, 0, NULL, 0, 0, NULL)
             """)
     }
     kill(getpid(), SIGKILL)
@@ -287,6 +288,126 @@ func runTornTrials(directory: String, trials: Int) async throws -> Bool {
         }
     }
     return allOK
+}
+
+/// A remote Mac's snapshot with one constant CPU reading, so each Mac's mean shows whether it holds only its own rows.
+func remoteSample(cpu: Double) -> RemoteSnapshot {
+    RemoteSnapshot(
+        capturedAt: Date(timeIntervalSince1970: origin),
+        cpuTotal: .available(cpu),
+        memory: .available(MemoryUsage(totalBytes: 10_000, usedBytes: 5_000, availableBytes: 5_000)),
+        memoryPressure: .available(.normal),
+        storage: .available([VolumeMetrics(
+            name: "Macintosh HD",
+            mountPoint: "/",
+            isRemovable: false,
+            isBrowsable: true,
+            capacity: .available(DiskCapacity(totalBytes: 1_000_000, availableBytes: 400_000))
+        )]),
+        network: .available([NetworkInterfaceMetrics(
+            name: "en0",
+            isUp: true,
+            isLoopback: false,
+            ipv4Addresses: ["100.70.1.2"],
+            totals: .unavailable(.notSampled),
+            rates: .available(NetworkRate(receivedPerSecond: 1_000, sentPerSecond: 100))
+        )]),
+        thermal: .available(.nominal),
+        loadAverage: .available(LoadAverage(oneMinute: 1, fiveMinutes: 1, fifteenMinutes: 1))
+    )
+}
+
+/// Three remote Macs ingest at once, each at a two-second cadence for seven days, through the real store. Each Mac
+/// reports its own constant CPU reading, so a row that landed under the wrong Mac shows in that Mac's mean. The run
+/// fails if any Mac's readings are mixed or its stored count differs from the count the store should accept.
+func runFleetBenchmark(directory: String) async throws {
+    let file = URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent("fleet-benchmark.sqlite")
+    let clock = ContinuousClock()
+    let cadence: TimeInterval = 2
+    let count = Int(7 * 86_400 / cadence)
+    let end = Date(timeIntervalSince1970: origin + Double(count) * cadence)
+    let fleet = try MetricHistoryStore.open(at: file, now: Date(timeIntervalSince1970: origin))
+    let hosts = (0..<3).map { HistoryHostID(rawValue: "bench-\($0)") }
+    let readings = [0.2, 0.4, 0.6]
+    let acceptedPerHost = count / 5
+    // Totals are exact for windows that start and end on five-minute boundaries, so the benchmark queries one.
+    let windowStart = ceil(origin / 300) * 300
+    let windowEnd = floor(end.timeIntervalSince1970 / 300) * 300
+    // The store keeps one snapshot per 10 seconds (its raw resolution), so accepted times are 10 seconds apart.
+    let expectedInWindow = (0..<acceptedPerHost).filter { index in
+        let time = origin + Double(index) * 10
+        return time >= windowStart && time < windowEnd
+    }.count
+
+    let ingestStart = clock.now
+    await withTaskGroup(of: Void.self) { group in
+        for (index, host) in hosts.enumerated() {
+            let template = remoteSample(cpu: readings[index])
+            group.addTask {
+                for step in 0..<count {
+                    let received = Date(timeIntervalSince1970: origin + Double(step) * cadence)
+                    _ = await fleet.ingest(template.withCapturedAt(received), from: host, receivedAt: received)
+                }
+            }
+        }
+    }
+    await fleet.flush()
+    let ingesting = ingestStart.duration(to: clock.now)
+    let statistics = await fleet.statistics
+    let calls = hosts.count * count
+
+    print("fleet: \(hosts.count) Macs ingesting at once, \(count) snapshots each at a \(Int(cadence))-second cadence over 7 days")
+    print(String(format: "ingest calls %d in %.1f s (%.1f us per call); accepted %d, throttled %d, duplicates %d, clock regressions %d",
+                 calls, milliseconds(ingesting) / 1_000, milliseconds(ingesting) * 1_000 / Double(calls),
+                 statistics.acceptedSnapshots, statistics.throttledSnapshots, statistics.duplicateSnapshots, statistics.clockRegressions))
+    guard statistics.acceptedSnapshots == hosts.count * acceptedPerHost else {
+        throw HarnessError(description: "accepted \(statistics.acceptedSnapshots), expected \(hosts.count * acceptedPerHost)")
+    }
+
+    var mixed: [String] = []
+    for (index, host) in hosts.enumerated() {
+        let summary = try await fleet.summary(host: host, from: Date(timeIntervalSince1970: windowStart), to: Date(timeIntervalSince1970: windowEnd))
+        let own = summary.samples == expectedInWindow && summary.cpu.count == expectedInWindow
+            && abs((summary.cpu.mean ?? -1) - readings[index]) < 1e-9
+        if !own {
+            mixed.append("\(host.rawValue) (\(summary.samples) of \(expectedInWindow) snapshots, mean \(summary.cpu.mean ?? -1), own reading \(readings[index]))")
+        }
+        print(String(format: "%@: %d snapshots stored, mean CPU %.3f (its own reading %.1f), only its own rows: %@",
+                     host.rawValue, summary.samples, summary.cpu.mean ?? -1, readings[index], own ? "true" : "false"))
+    }
+    guard mixed.isEmpty else {
+        let writes = await fleet.lastWriteError ?? "none"
+        throw HarnessError(description: "stored readings do not match each Mac's own readings: \(mixed.joined(separator: "; ")); dropped \(statistics.droppedPoints), last write error \(writes)")
+    }
+
+    var summaryTimes: [Duration] = []
+    var seriesTimes: [Duration] = []
+    for host in hosts {
+        for _ in 0..<20 {
+            let summaryStart = clock.now
+            _ = try await fleet.summary(host: host, from: Date(timeIntervalSince1970: windowStart), to: Date(timeIntervalSince1970: windowEnd))
+            summaryTimes.append(summaryStart.duration(to: clock.now))
+            let seriesStart = clock.now
+            _ = try await fleet.series(host: host, range: .week, now: end)
+            seriesTimes.append(seriesStart.duration(to: clock.now))
+        }
+    }
+    print(String(format: "per-Mac 7-day summary, median of 60: %.2f ms; week chart, median of 60: %.2f ms",
+                 milliseconds(median(summaryTimes)), milliseconds(median(seriesTimes))))
+
+    let exportStart = clock.now
+    let rows = try await fleet.exportRows(
+        hosts: hosts,
+        from: Date(timeIntervalSince1970: windowStart),
+        to: Date(timeIntervalSince1970: windowEnd),
+        maximumPoints: 1_000
+    )
+    let exporting = exportStart.duration(to: clock.now)
+    let tiers = Set(rows.map(\.resolution.label)).sorted().joined(separator: ", ")
+    print(String(format: "export of 7 days for 3 Macs, budget 1000 points: %d rows in %.1f ms, tiers used: %@",
+                 rows.count, milliseconds(exporting), tiers))
+    print(String(format: "file size %.2f MB, write-ahead log %.2f MB",
+                 Double(fileSize(file.path)) / 1_048_576, Double(fileSize(file.path + "-wal")) / 1_048_576))
 }
 
 let arguments = CommandLine.arguments

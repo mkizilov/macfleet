@@ -22,6 +22,12 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetState/Remote` | Fleet state: session opening, failure classification, backoff, one watcher per Mac, and the unified overview model |
 | `Sources/MacFleetUI/Fleet` | The unified dashboard and the add-a-Mac form |
 | `docs/fleet-dashboard.md` | The Fleet window: pairing, trust, retries, storage, and limits |
+| `docs/multi-host-history.md` | Multi-Mac history: host identity, clock handling, retention, queries, export, and limits |
+| `Sources/MacFleetKit/History/HistoryHost.swift` | Host IDs, ingest outcomes, window summaries, and the fleet storage protocol |
+| `Sources/MacFleetKit/History/HistoryCSV.swift` | CSV rendering for the history export |
+| `Sources/MacFleetState/History/FleetHistoryModel.swift` | The multi-Mac history model: selection, range, totals, retention, alerts, and export |
+| `Sources/MacFleetState/Alerts/HostAlertCenter.swift` | Per-Mac alert settings and state |
+| `Sources/MacFleetUI/Fleet/FleetHistoryView.swift` | The History window: charts, comparison, totals, retention, alerts, and export |
 | `Sources/MacFleetHeadless` | The `macfleet-headless` command: `run`, `status`, `addresses`, `identity`, `credential`, and `fetch` |
 | `Support/launchd` | The LaunchAgent template for the headless agent (not installed by the repository) |
 | `docs/remote-protocol.md` | Protocol specification: identity model, authentication, wire format, compatibility rules, and threat model |
@@ -155,12 +161,23 @@ The history section reloads at most every 30 seconds while it is open, and never
 | Accepted after 10-second downsampling | 60,480 (241,920 skipped) |
 | Transactions for those points | 2,015 |
 | Rows written (points plus volume rows) | 181,353 |
-| Time inside `save()`, total / mean / slowest | 671.6 ms / 2.2 µs / 3.83 ms |
+| Time inside `save()`, total / mean / slowest | 773.1 ms / 2.6 µs / 3.78 ms |
 | Stored after 7 days: raw, five-minute, hourly | 17,281, 2,015, 168 points |
-| Series query, median of 20: hour / day / week | 0.23 / 0.29 / 0.21 ms |
-| Reopen with integrity check and upkeep | 6.62 ms |
-| Files after the run: database / write-ahead log | 3.34 MB / 1.94 MB |
-| Resident memory: before / after writes | 5.9 MB / 11.0 MB |
+| Series query, median of 20: hour / day / week | 0.26 / 0.32 / 0.23 ms |
+| Reopen with integrity check and upkeep | 7.15 ms |
+| Files after the run: database / write-ahead log | 3.82 MB / 1.27 MB |
+| Resident memory: before / after writes | 6.0 MB / 12.2 MB |
+
+Three Macs ingesting at once, each at a 2-second cadence for seven days, through the same store:
+
+| Measure | Result |
+| --- | --- |
+| Ingest calls, total wall time | 907,200 calls in 4.5 s (5.0 µs per call) |
+| Accepted / throttled | 181,440 / 725,760 |
+| Stored per Mac in the aligned window, each with only its own reading | 60,450 each, means 0.200, 0.400, 0.600 |
+| 7-day summary per Mac, median of 60 | 0.11 ms |
+| Week chart per Mac, median of 60 | 0.15 ms |
+| Export of 7 days for three Macs, 1,000-point budget | 2,670 rows in 0.6 ms |
 
 An earlier version batched on a 30-second age, so 10-second points were written four at a time: 16,127 transactions for the same week. The regression test `defaultBatchingWritesFarLessOftenThanEveryFewPoints` pins the fixed default. Restoring the old value makes it fail.
 
@@ -168,8 +185,8 @@ An earlier version batched on a 30-second age, so 10-second points were written 
 
 `scripts/swiftc-history-check.sh` runs three kinds of crash test against real files:
 
-- **Batches**, 20 trials. A writer is killed with SIGKILL at a random moment. Rollups are off, so each commit is exactly one full batch. The file must hold every batch the writer confirmed, at most one more batch, and only whole batches. Result: 20 of 20 consistent.
-- **Upkeep**, 20 trials. The same kill, with rollups and pruning running during the writes. Every five-minute bucket must hold exactly the samples of its raw points, counted once. Result: 20 of 20 consistent.
+- **Batches**, 30 trials. A writer is killed with SIGKILL at a random moment. Rollups are off, so each commit is exactly one full batch. The file must hold every batch the writer confirmed, at most one more batch, and only whole batches. Result: 30 of 30 consistent.
+- **Upkeep**, 30 trials. The same kill, with rollups and pruning running during the writes. Every five-minute bucket must hold exactly the samples of its raw points, counted once. Result: 30 of 30 consistent.
 - **Torn**, 5 trials. The writer stages 500 rows in a transaction and kills itself before COMMIT, so the timing is deterministic. The file must hold only the 300 committed points. Result: 5 of 5.
 
 Random kills do not guarantee a kill inside a transaction. The torn trials do, and the in-process rollback test covers the same property.
@@ -177,7 +194,7 @@ Random kills do not guarantee a kill inside a transaction. The torn trials do, a
 ### Limitations
 
 - A hard crash can lose up to 300 seconds of raw points still in memory. A clean quit and sleep both write them first.
-- Timestamps are wall-clock. A backward clock jump is accepted, but it can leave points below an already rolled-up horizon as raw points that are never rolled up. They are pruned with the raw tier.
+- Timestamps are this Mac's clock. If it moves back more than 5 seconds, new snapshots are held until it passes the last recorded time, and the history card says so. Nothing is stored out of order, but the held snapshots are not stored.
 - Rollup and pruning are tested by random kills and by the in-process rollback, not by a deterministic kill inside a rollup transaction.
 - Only browsable, monitored volumes are stored.
 - If the app is closed for longer than a tier's retention, the missing span stays a gap.
@@ -447,6 +464,18 @@ The **Fleet** window (opened from **Windows** in the popover) shows this Mac bes
 - The Fleet window was typechecked, not run, and the keychain store was not exercised by the automated tests.
 - Not verified on a real tailnet or with two physical Macs.
 
+## Multi-Mac history
+
+Each Mac has its own stored history, keyed by a stable host ID: `local` for this Mac and the record ID of each registered Mac. Rows from different Macs are never combined. The **History** window (Windows > History) charts each selected Mac, compares up to four side by side, shows totals across Macs, sets retention and alert settings per Mac, and exports CSV. A remote sample is placed by the time this Mac received it, so a skewed clock on that Mac never reorders its history. The offset is shown when it exceeds a minute. Removing a Mac deletes its history and alert settings. The detail, the query rules, and the limits are in [docs/multi-host-history.md](docs/multi-host-history.md).
+
+### Limitations
+
+- The History window was typechecked, not run. The CSV save panel was not exercised.
+- Totals are exact for windows aligned to five-minute boundaries. The app's windows are aligned, so this matters only for custom queries.
+- A Mac that stops reporting keeps its newest open bucket until it reports again.
+- A clock that moves back more than 5 seconds holds new snapshots until it catches up.
+- The fleet benchmark uses simulated readings. Not verified on a tailnet or with physical Macs.
+
 ## Headless agent
 
 `macfleet-headless` is a separate command-line executable for running MacFleet without the menu bar. It samples the Mac at a configured interval, serves the latest sample to authenticated clients over TLS, writes a health report and a JSON-lines log, and stops cleanly on SIGTERM or SIGINT. The full guide is [docs/headless-agent.md](docs/headless-agent.md).
@@ -479,11 +508,11 @@ scripts/swiftc-history-check.sh
 
 `scripts/swiftc-benchmark.sh` builds the kit and state layers with optimization and runs the dashboard benchmark. Its outputs are removed on exit.
 
-`scripts/swiftc-history-check.sh` builds MacFleetKit with optimization and runs the crash checks and the seven-day storage benchmark described under Historical metrics. `TRIALS` sets the number of random kill trials per pattern (default 20). Outputs are removed on exit. It takes a few minutes.
+`scripts/swiftc-history-check.sh` builds MacFleetKit with optimization and runs the crash checks and the seven-day storage benchmark described under Historical metrics. `TRIALS` sets the number of random kill trials per pattern (default 30). Outputs are removed on exit. It takes a few minutes.
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 567 Swift Testing tests in 122 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, and 70 cover the fleet dashboard, including real loopback sessions), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 628 Swift Testing tests in 135 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, and 61 cover multi-host history), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 

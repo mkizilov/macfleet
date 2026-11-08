@@ -189,7 +189,7 @@ func fleetEventually(_ condition: () -> Bool) async throws {
 }
 
 /// Waits for a condition that needs an actor to answer.
-func fleetEventuallyAsync(_ condition: () async -> Bool) async throws {
+func fleetEventuallyAsync(_ condition: @Sendable () async -> Bool) async throws {
     for _ in 0..<2_000 {
         if await condition() { return }
         try await Task.sleep(for: .milliseconds(5))

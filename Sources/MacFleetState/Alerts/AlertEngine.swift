@@ -131,8 +131,14 @@ public struct AlertEngine: Sendable {
         }
     }
 
-    /// Evaluates one snapshot at its capture time and returns the notices to send, in key order.
+    /// Evaluates one system snapshot at its capture time and returns the notices to send, in key order.
     public mutating func evaluate(_ snapshot: SystemSnapshot) -> [AlertNotice] {
+        evaluate(RemoteSnapshot(system: snapshot))
+    }
+
+    /// Evaluates one snapshot at its capture time and returns the notices to send, in key order. A remote Mac's readings
+    /// come through here, stamped with the time this app received them, so its clock never sets a sustained period.
+    public mutating func evaluate(_ snapshot: RemoteSnapshot) -> [AlertNotice] {
         let now = snapshot.capturedAt
         let slept = lastEvaluation.map { now.timeIntervalSince($0) > Self.maximumSampleGap } ?? false
         lastEvaluation = now
@@ -237,12 +243,12 @@ public struct AlertEngine: Sendable {
     private static func observations(
         for metric: AlertMetric,
         threshold: Double,
-        in snapshot: SystemSnapshot
+        in snapshot: RemoteSnapshot
     ) -> Observations {
         switch metric {
         case .highCPU:
-            let condition = snapshot.cpu.availableValue.map { cpu -> Condition in
-                let percent = cpu.total * 100
+            let condition = snapshot.cpuTotal.availableValue.map { total -> Condition in
+                let percent = total * 100
                 return Condition(
                     label: metric.title,
                     breaches: percent >= threshold,
@@ -255,7 +261,7 @@ public struct AlertEngine: Sendable {
             let level = snapshot.memoryPressure.availableValue.map(memoryLevel)
             return single(metric, ordinalCondition(metric, level, threshold))
         case .thermalPressure:
-            let level = snapshot.hardware.availableValue?.thermalState.availableValue.map(thermalLevel)
+            let level = snapshot.thermal.availableValue.map(thermalLevel)
             return single(metric, ordinalCondition(metric, level, threshold))
         case .highNetwork:
             let condition = AggregateNetworkRate.rate(snapshot.network).map { rate -> Condition in
@@ -269,7 +275,7 @@ public struct AlertEngine: Sendable {
             }
             return single(metric, condition)
         case .lowDiskSpace:
-            guard case let .available(volumes) = snapshot.volumes else {
+            guard case let .available(volumes) = snapshot.storage else {
                 return Observations(items: [], complete: false)
             }
             var items: [Observation] = []

@@ -58,7 +58,7 @@ When a Mac's certificate changes, the card says so and shows the new fingerprint
 
 ## Removing a Mac
 
-**Remove** on a card forgets the Mac's record and its secret, and stops its connection. Pair it again to monitor it.
+**Remove** on a card forgets the Mac's record and its secret, stops its connection, and deletes its stored history and alert settings. Pair it again to monitor it. See [multi-host-history.md](multi-host-history.md) for how history is kept per Mac.
 
 ## Limits
 
