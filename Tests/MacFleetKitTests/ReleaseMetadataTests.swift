@@ -149,6 +149,17 @@ struct ReleaseMetadataTests {
         #expect(!workflow.contains("| tee"), "a pipe into tee hides the exit status of the script")
     }
 
+    /// The license is MIT, with the copyright holder named in the license and in the app's copyright string. The packages
+    /// carry the same license text.
+    @Test func theLicenseIsMITAndTheAppNamesTheSameCopyrightHolder() throws {
+        let license = try repositoryText("LICENSE")
+        #expect(license.hasPrefix("MIT License\n"))
+        #expect(license.contains("Copyright (c) 2026 Mykyta Kizilov\n"))
+        #expect(license.contains("THE SOFTWARE IS PROVIDED \"AS IS\""))
+        let plist = try repositoryText("Support/app/Info.plist.template")
+        #expect(plist.contains("Copyright \u{00A9} 2026 Mykyta Kizilov. Released under the MIT License."))
+    }
+
     @Test func theVersionDescriptionNamesTheVersion() {
         #expect(MacFleetVersion.description.contains(MacFleetVersion.marketing))
         #expect(MacFleetVersion.description.contains("remote protocol 1.0"))

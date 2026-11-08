@@ -37,7 +37,7 @@ HEADLESS="$WORK/headless/macfleet-headless-$VERSION"
 COMMON="-swift-version 6 -target arm64-apple-macosx$MIN_OS -sdk $SDK -O -whole-module-optimization"
 trap 'rm -rf "$WORK"' EXIT
 rm -rf "$WORK"
-mkdir -p "$WORK/modules" "$WORK/objects" "$APP/Contents/MacOS" \
+mkdir -p "$WORK/modules" "$WORK/objects" "$APP/Contents/MacOS" "$APP/Contents/Resources" \
   "$HEADLESS/bin" "$HEADLESS/launchd" "$HEADLESS/scripts" "$HEADLESS/docs" "$DIST"
 
 echo "== compiling the modules"
@@ -68,7 +68,8 @@ swiftc -module-name macfleet_headless -I "$WORK/modules" $COMMON -framework Meta
 cp Support/launchd/com.macfleet.headless.plist "$HEADLESS/launchd/"
 cp scripts/install-agent.sh scripts/uninstall-agent.sh "$HEADLESS/scripts/"
 cp docs/installation.md docs/headless-agent.md docs/troubleshooting.md docs/remote-protocol.md "$HEADLESS/docs/"
-cp README.md "$HEADLESS/"
+cp README.md LICENSE "$HEADLESS/"
+cp LICENSE "$APP/Contents/Resources/LICENSE"
 
 echo "== signing"
 codesign --force --options runtime $TIMESTAMP --sign "$IDENTITY" --identifier "$BUNDLE_ID" "$APP/Contents/MacOS/MacFleet"
