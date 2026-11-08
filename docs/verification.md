@@ -9,25 +9,28 @@ re-run. The status words mean:
 - **Unverified.** The code exists and compiles, but no check has exercised it in this environment.
 - **Not implemented.** There is no code for it.
 
-The results below come from the release review of the current tree (727 tests in 154 suites, the performance check, and the
-packaging run on this Mac, macOS 27.2, Swift 6.4.2, Command Line Tools). Nothing here was run on a second Mac or on
-GitHub.
+The results below come from the publication review of the current tree: 728 tests in 154 suites, the performance check,
+the storage gate, the packaging run, and the publication scans. They were run on this Mac (macOS 27.2, arm64), with the
+Command Line Tools and Swift 6.4.4. Nothing here was run on a second Mac, on GitHub, or with Xcode.
 
 ## Commands
 
 | Command | What it checks | Last result |
 | --- | --- | --- |
-| `sh scripts/swiftc-verify.sh` | Manifest, every module, the UI typecheck, the agent, the headless smoke check, and every Swift Testing suite | Passed, 727 tests in 154 suites, zero warnings, zero errors |
+| `sh scripts/swiftc-verify.sh` | Manifest, every module, the UI typecheck, the agent, the headless smoke check, and every Swift Testing suite, each under a time limit | Passed, 728 tests in 154 suites, zero warnings, zero errors |
 | `sh scripts/check-release.sh` | Shell syntax, property lists, and version agreement across `Config/`, the Xcode project, and the Swift constants | Passed |
-| `sh scripts/performance-check.sh` | Optimized benchmarks against `Config/performance-budgets.env` | Passed, every budget within its ceiling |
-| `sh scripts/swiftc-benchmark.sh` | Dashboard work per sample, optimized, two runs | Median 45.0 and 44.0 µs |
-| `sh scripts/swiftc-history-check.sh` | Crash trials for batches, upkeep, and torn writes, and the seven-day storage benchmark | Not run in this review. It passed when the history code last changed, and that code is unchanged since |
-| `sh scripts/package-app.sh` | Release packages in `dist/`, signed and checksummed | Passed. Both checksums verify. The packaged agent reports the version in `Config/Version.xcconfig` |
-| `sh scripts/notarize.sh` | Notarization of a Developer ID package | Refuses an ad hoc build and a missing profile, as tested. No notarization was submitted |
+| `sh scripts/performance-check.sh` | Optimized benchmarks against `Config/performance-budgets.env` | Passed. Dashboard 44.0 µs, history save 2.9 µs, reopen 7.38 ms, and every other budget within its ceiling |
+| `sh scripts/swiftc-benchmark.sh` | Dashboard work per sample, optimized | Run in the release review: median 45.0 and 44.0 µs |
+| `sh scripts/swiftc-history-check.sh` | Crash trials for batches, upkeep, and torn writes, and the seven-day storage benchmark | Passed: batches 30 of 30, upkeep 30 of 30, torn writes 5 of 5 |
+| `sh scripts/package-app.sh` | Release packages in `dist/`, signed and checksummed, with the license in each | Passed. Both checksums verify. The packaged agent reports the version in `Config/Version.xcconfig` |
 | `sh scripts/install-agent.sh` and `scripts/uninstall-agent.sh` | Plan-first install and removal of the agent | Passed in a scratch folder, from a packaged build. No LaunchAgent was loaded |
-| `sh scripts/update-protocol-fixtures.sh` | Regenerates the protocol 1.0 fixtures | Run only when a wire change is intended. Its output is compared by the tests |
-| `swift build --disable-sandbox` | SwiftPM manifest and package graph | The manifest compiles and the package graph loads. The build then stops in the build service (see below) |
-| `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build` | The Xcode application project | Not run. Xcode is not installed here |
+| `sh scripts/notarize.sh` | Notarization of a Developer ID package | Refuses an ad hoc build and a missing profile, as tested. No notarization was submitted |
+| `sh scripts/update-protocol-fixtures.sh` | Regenerates the protocol 1.0 fixtures | Regenerated in this review, and all six files are byte-identical to the committed ones |
+| `swift package --disable-sandbox dump-package` | The package manifest, its targets, and the fixture exclusion | Passed: seven targets, and the test target excludes `Fixtures` |
+| `swift build --disable-sandbox` (default and `--build-system swiftbuild`) | SwiftPM's build | Not complete. The manifest compiles, and both build systems stop at the build service's `XCBuildData` write (see below) |
+| `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build` | The Xcode application project | Not run. Xcode is not installed in this environment |
+| `swift-format lint --strict` with a candidate configuration | Style findings across the sources | Ran: 1,424 findings in 132 files, all style. Not a gate (see Lint below) |
+| `gitleaks git` (pinned 8.30.1, checksum-verified, in `.tools/`) | Secrets in every commit | Passed: no leaks in 23 commits |
 
 ## Areas
 
@@ -56,18 +59,41 @@ GitHub.
 | Release versioning and metadata | Verified | `ReleaseMetadataTests` and `check-release.sh` | Xcode's own build settings |
 | Ad hoc signing and the hardened runtime | Verified | `package-app.sh` signs and checks the signature. The signing report shows the runtime flag | A Developer ID signature |
 | Notarization and Gatekeeper | Unverified | The guard refuses an ad hoc build. The script is written | Any real notarization, staple, or `spctl` assessment |
-| Packaged app launch | Partial | The packaged app ran for four seconds without a library-loading error (checked again in this review) | Its windows, menu bar, and behaviour over time |
+| Packaged app launch | Partial | The packaged app ran for four seconds without a library-loading error, checked again in this review | Its windows, menu bar, and behaviour over time |
+| Time limits on hanging steps | Verified | A three-second bound stopped the real test binary, and the bounded helper keeps errexit and exit status. The Swift Testing time limit names a blocked test after a minute | A hang inside a real remote peer |
+| MIT license | Verified | `LICENSE` matches the Open Source Initiative text after whitespace and quote normalization. A test pins its first line and copyright. The packages carry it | Legal review. The licence choice and the copyright holder are the owner's |
+| Third-party software | Verified | No third-party source or dependency in the tracked tree or the history. The packages link only system libraries | An audit of the Apple SDK's own terms, which are not redistributed |
+| Publication scan | Verified, with one finding | gitleaks over 23 commits: no leaks. The current tree has no personal data or key material. There is no remote, and `.opencode/` has never been tracked | One historic commit contains an absolute home-folder path. See Publication checks |
+| Lint and formatting | Partial | `swift-format lint` runs with the Command Line Tools' 6.4.4 | No gate. 1,424 style findings in 132 files, none of them a behaviour change |
 | CI workflow | Unverified | The YAML parses, every referenced script exists, and `ReleaseMetadataTests` guard the runner and toolchain | A run on GitHub |
 | Performance budgets | Partial | `performance-check.sh`: dashboard work, history save, queries, fleet ingest, history memory growth, reopen | Resident memory of a running app or agent, and rendering |
 | Energy (wakeups, CPU of the running app) | Unverified | The sampling policy and its limits are tested | Instruments measurements of wakeups and CPU |
 
+## Publication checks
+
+- **Secrets.** gitleaks 8.30.1 scanned all 23 commits on every ref and found no leaks. The binary came from the project's
+  GitHub release, and its checksum was checked against the release's checksum file before it ran. It sits in `.tools/`,
+  which is git-ignored.
+- **Current tree.** `git grep` finds no personal path, email address, or key material in tracked files. The only
+  matches are the copyright line and documentation placeholders such as `/Users/you/`.
+- **History.** No blob is over 1 MB. No file with a key or certificate extension was ever tracked. The author identities
+  in the history are the workspace's own, and no remote is configured.
+- **One finding.** One historic commit, `78c32d5`, contains the absolute home-folder path of the machine it was written
+  on, in `AGENTS.md`. The current tree does not contain it. The history has not been rewritten, and that decision is
+  left to the owner before publication.
+
 ## Toolchain limits
 
 - **SwiftPM in this sandbox.** SwiftPM runs each manifest inside its own `sandbox-exec`, and this sandbox refuses to nest
-  one. `--disable-sandbox` turns off that inner sandbox only. The build service then fails on an atomic write to
-  `XCBuildData`, which is the documented sandbox limit. `swift test` has not run here.
+  one. `--disable-sandbox` turns off that inner sandbox only, and the manifest then compiles. The build service then
+  fails on an atomic write to `XCBuildData`, with either build system. This is the sandbox's limit, and it is not in the
+  source. `swift test` has not run here.
+- **Lint.** The project has no lint gate. The configuration used for the measurement is described in the README.
 - **SwiftUI macros.** The Command Line Tools cannot expand `@State`. The UI module therefore uses no property wrappers, and
   the app target uses none either.
-- **Xcode.** Xcode is not installed in this environment, so the Xcode project has never been opened or built here.
+- **Xcode.** Xcode is not installed in this environment, so the Xcode project has never been opened or built here. It
+  cannot be installed from this sandbox without writing outside the repository.
 - **Toolchain paths.** The scripts use `/Library/Developer/CommandLineTools` by default. CI pins `DEVELOPER_DIR` to that
   path. A Mac with only Xcode needs `DEV` or `SDK` set.
+- **Network.** GitHub, the GitHub API, PyPI, and Apple's website were all reachable in this review. Tools can be fetched
+  into the project's `.tools/` directory.

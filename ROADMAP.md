@@ -11,35 +11,32 @@ acceptance criteria are met and that map is updated.
 
 ## Review summary
 
-**Reviewed in this release review:** the CI workflow, its toolchain pins, and its exit-status handling; the release and
-install scripts and the package layout; `Package.swift` and the fixture layout, through a SwiftPM probe; the popover and
-process-list sampling loops, including rate changes and cancellation; the sampling engine's deadline race; the one
-`@unchecked Sendable` handle and its written justification; the 26 `MainActor.assumeIsolated` bridges; the keychain
-store's Security calls; the pinned TLS path (fingerprint check, anchored trust, and constant-time HMAC validation); and
-the main-thread work per sample, measured by benchmark. History retention was reviewed when the history store was built, and its code
-has not changed since.
+**Publication review.** This pass checked the repository for publication. It covered the license, third-party notices,
+secrets and personal data in the tracked tree and in the full history, and the checks that earlier passes could not run.
 
-**Fixed in this review:**
+**Done in this pass.**
 
-- `Package.swift` declared the six protocol fixtures as unhandled files, a warning that every build would show. The
-  fixture folder is now excluded from the test target. The tests still read it by `#filePath`.
-- The CI workflow had three defects. The performance job piped its script into `tee`, which reports the status of `tee`
-  and hides a failed budget. The verify log it uploads was never written. The runners were macOS 14, where the identity
-  tests cannot pass, and no job pinned the toolchain. The workflow now runs on macOS 15, pins `DEVELOPER_DIR` to the
-  Command Line Tools, and keeps each script's exit status. A new test guards those properties.
-- The README and the verification docs had stale claims: the sampling cadence, the retention and launchd notes, the
-  `@State` note, the test count, the SwiftPM failure, and the expiry and keychain statements in the threat model. They now
-  match the code and the checks run here.
+- Added the MIT license in `LICENSE`, with the copyright holder named in the app's copyright string. Both packages carry the
+  license text.
+- Bounded every long step with a time limit: the Swift Testing run, the agent and the smoke check's network steps, the
+  benchmarks, and the storage gate's writer children. A three-second bound on the real test binary stopped it, and no process
+  was left behind.
+- Tightened `.gitignore` for managed tool configuration and key material. No tracked file has those names.
+- Rechecked the registry claim. No repository file says the registry is unreachable. GitHub, the GitHub API, PyPI, and Apple's
+  site all responded in this pass. gitleaks 8.30.1 was installed into `.tools/` and checked against its release checksums.
+- Rechecked the SwiftPM claim. The manifest now compiles with `--disable-sandbox`. Both build systems still stop at the build
+  service's `XCBuildData` write.
+- Ran swift-format's lint over the sources. It reports 1,424 style findings in 132 files and no behaviour change. The project
+  has no lint gate, so the result is reported, not enforced.
+- Scanned for secrets and personal data. gitleaks found no leaks in 23 commits, and the tracked tree is clean. One historic
+  commit (`78c32d5`) contains an absolute home-folder path. It is reported, and the history has not been rewritten.
 
-**Fixed earlier:** the sampling engine and the metrics provider each had their own deadline race. Both now use
-one helper, `raceAgainstDeadline`, which is tested with work that ignores cancellation.
+**Fixed in earlier passes.** The protocol-fixture warning, the CI pipe and runner defects, and the stale documentation claims.
 
-**Current state, in short.** The core is implemented and verified in this environment: metrics, local history, the
-sampling engine, the processes model, the remote protocol with its loopback sessions, the headless agent's run, health,
-and shutdown, the install scripts, the release metadata, and the budgets. Most of the user-facing requirements are
-implemented but not verified in a running app: the windows, notifications, launch at login, keyboard use, and
-accessibility. The app has not been signed with a Developer ID, notarized, or run on a second Mac. The Xcode project has
-never been opened by Xcode.
+**Current state.** MIT-licensed. 728 tests in 154 suites pass with zero warnings and zero errors. The storage gate, the
+performance budgets, the packaging, and the installer pass. Most user-facing requirements are implemented but not verified in
+a running app. The app has no Developer ID signature and no notarization, and it has not run on a second Mac. The Xcode project
+has never been built, and SwiftPM has not built in this sandbox.
 
 **Largest risks, in order:**
 
@@ -48,8 +45,15 @@ never been opened by Xcode.
 3. The app's keychain path is never exercised by a check (step 4).
 4. The Xcode project is hand-written and has never been built (step 3).
 5. Notification delivery has not been observed (step 5).
-6. The 26 `assumeIsolated` bridges in `App/MacFleetApp.swift` trap if SwiftUI ever calls one off the main actor. Nothing
-   has shown that happening, and step 2's Main Thread Checker run tests it.
+6. The 26 `assumeIsolated` bridges in `App/MacFleetApp.swift` trap if SwiftUI ever calls one off the main actor. Nothing has
+   shown that happening, and step 2's Main Thread Checker run tests it.
+
+**Before publication (owner decisions, not roadmap steps).**
+
+- Decide whether to rewrite the historic home-folder path in commit `78c32d5`, or publish the history as it is. The
+  repository has not been rewritten.
+- Confirm the copyright holder and year in `LICENSE`, the app's copyright string, and the README.
+- The commit authors are the workspace's own identities. Confirm that they are the ones to publish.
 
 ## Priority 0: security and verification gaps
 
@@ -428,15 +432,61 @@ contains the history, identity material, or a client secret.
 
 **Effort.** 6 hours.
 
+## Added in the publication pass
+
+Steps 20 and 21 were added after the others. Their numbers follow 19 so that existing references stay valid. Step 21 is
+Priority 1, and step 20 is Priority 2.
+
+## 20. Adopt a formatting gate
+
+**Scope.** Choose the house formatting rules: four-space indentation, 120-column lines, and the case-binding style the code
+already uses. Apply the formatter to the sources in one mechanical commit, review its diff, and run `swift-format lint
+--strict` in `scripts/swiftc-verify.sh`. The Command Line Tools already ship swift-format 6.4.4, so nothing needs installing.
+The measured starting point, with a candidate configuration, is 1,424 findings in 132 files: 551 indentation, 298 add-line,
+285 line-length, 253 `let` placement in case patterns, 28 trailing commas, 5 import order, 3 extension access levels, and 1
+removed line.
+
+**Rationale.** Without a gate, style drifts. The current findings are not bugs, but a gate stops new ones from entering the
+code in review.
+
+**Dependencies.** None. The formatter is part of the Command Line Tools.
+
+**Acceptance criteria.**
+- The formatting commit changes no behaviour: verify passes with the same test count, and the storage and performance checks
+  still pass.
+- `swift-format lint --strict` passes in `scripts/swiftc-verify.sh`, and its configuration is committed.
+- The README and `docs/verification.md` describe the gate and its result.
+
+**Effort.** 8 hours.
+
+## 21. Restore SwiftPM builds and tests in this sandbox
+
+**Scope.** Find out why the build service's manifest write is refused, the `XCBuildData` write that both build systems hit.
+If the sandbox owner can allow that write for the project's own build directory, re-run `swift build` and `swift test` with
+`--disable-sandbox`. Do not change the outer sandbox. If the write cannot be allowed, record that `swift test` stays
+unavailable here, and keep `swiftc-verify.sh` as the verified path.
+
+**Rationale.** SwiftPM is the normal build path on a Mac with Xcode, and `swift test` has never run here. The `swiftc` path
+compiles the same sources and suites, but it is a second build that can drift from the package.
+
+**Dependencies.** The sandbox owner, outside this repository. Step 3 for the Xcode side.
+
+**Acceptance criteria.** `swift build` and `swift test` complete with the same test count as `swiftc-verify.sh`. Otherwise,
+the limit is recorded with the exact sandbox denial and the owner's decision.
+
+**Effort.** 4 hours.
+
 ## Total estimate and assumptions
 
-**Total: 178 hours** across the 19 steps. By priority: Priority 0 is 44 hours, Priority 1 is 84 hours, Priority 2 is 44
-hours, and Priority 3 is 6 hours. With a 20% contingency, the total is about 214 hours.
+**Total: 190 hours** across the 21 steps. By priority: Priority 0 is 44 hours, Priority 1 is 88 hours (steps 6 to 12, and step
+21), Priority 2 is 52 hours (steps 13 to 18, and step 20), and Priority 3 is 6 hours. With a 20% contingency, the total is about
+228 hours.
 
 **Assumptions.**
 
 - The estimates are for an engineer who knows this repository. They include tests and documentation.
-- Full Xcode 16 or later is available for steps 3, 10, 11, and 12.
+- Full Xcode 16 or later is available for steps 3, 10, 11, and 12. The owner installs it. It cannot be installed from this
+  sandbox without writing outside the repository.
 - The user supplies an Apple Developer certificate and notarytool profile for step 6. Nothing is committed.
 - Two Macs on one tailnet are available for step 7. The user approves installing the agent on each one, and no system
   setting is changed without that approval.
@@ -444,3 +494,4 @@ hours, and Priority 3 is 6 hours. With a 20% contingency, the total is about 214
 - Apple's notarization queue time, CI queue time, and the user's own review time are excluded.
 - The estimates assume the current architecture. They do not include a new feature beyond what the steps name.
 - Screenshots and logs from the user's Mac are kept out of the repository.
+- The format estimate in step 20 assumes the house style is fixed in that step, rather than changed later.

@@ -509,7 +509,7 @@ Each Mac has its own stored history, keyed by a stable host ID: `local` for this
 
 ### Limitations
 
-- The launchd template lints, but it was not installed or loaded.
+- The launchd template lints, and the installer writes it into a scratch folder in tests. No agent was loaded with `launchctl` on any Mac.
 - The keychain store compiles, but automated tests do not change the keychain, so it was not exercised.
 - Not verified on a real tailnet or from another Mac.
 - Login behaviour, such as whether the listener is ready before Tailscale connects, was not observed.
@@ -527,7 +527,7 @@ scripts/performance-check.sh
 scripts/package-app.sh
 ```
 
-`scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, builds `macfleet-headless`, compiles and runs the Swift Testing suites, then runs `scripts/headless-smoke.sh`, which starts the headless agent as its own process and checks it end to end. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
+`scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, builds `macfleet-headless`, compiles and runs the Swift Testing suites, then runs `scripts/headless-smoke.sh`, which starts the headless agent as its own process and checks it end to end. It exits non-zero on the first failure. Its long steps run under a time limit: the Swift Testing run for `TEST_TIMEOUT` seconds (900 by default), and the agent and the smoke check's network steps. A hang fails the pass instead of blocking it. The loopback suites also carry a one-minute Swift Testing time limit, which names a hung test in the log. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
 
 `scripts/check-release.sh` checks shell syntax, the property lists, and that the version agrees between `Config/Version.xcconfig`, the Xcode project, and the Swift constants. It builds nothing.
 
@@ -541,7 +541,9 @@ scripts/package-app.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result (release review): manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 727 Swift Testing tests in 154 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, 61 cover multi-host history, and 62 cover settings, navigation, groups, and accessibility; the other 332 cover the earlier layers, and 37 were added for the release work), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time). The app target typechecks in the same review, with no `@State` to replace (see the limitation below).
+Last run result (publication review): manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 728 Swift Testing tests in 154 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, 61 cover multi-host history, and 62 cover settings, navigation, groups, and accessibility; the other 333 cover the earlier layers, the release files, the install scripts, and the license), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time). The app target typechecks in the same review, with no `@State` to replace (see the limitation below).
+
+Lint. The project has no lint gate. swift-format 6.4.4, from the Command Line Tools, run in lint mode with a four-space, 120-column candidate configuration, reports 1,424 style findings in 132 files: indentation, line length, the placement of `let` in case patterns, and trailing commas. None of them changes behaviour, and the compiler reports no warnings. Adopting a formatter is roadmap step 20.
 
 The test suites cover:
 
@@ -595,7 +597,7 @@ Taken on the development Mac (arm64, 10 logical CPUs, 16 GB, macOS 27.2 build 26
 `swift build`, `swift test`, and `swift run macfleet-agent` do not complete in the restricted repository sandbox. Checked in the release review with the Command Line Tools toolchain (Swift 6.4.2):
 
 - SwiftPM runs each package manifest inside its own `sandbox-exec`, and this sandbox refuses to nest one (`sandbox_apply: Operation not permitted`). `--disable-sandbox` turns off only that inner manifest sandbox, and the repository's outer sandbox still applies. With it, the manifest compiles and the test fixtures are declared, so the unhandled-file warning is gone.
-- The build then stops in the build service. The default build system reports `unable to write manifest to .../XCBuildData/...` (EPERM).
+- The build then stops in the build service. The default build system reports `unable to write manifest to .../XCBuildData/...` (EPERM). The `swiftbuild` build system stops at the same write, as checked in the publication review.
 - `--build-system native` stops with `I/O error ... output-file-map.json`.
 
 Cause of the build-service failure: Foundation's atomic writes (`Data.write(options: .atomic)`, `FileManager.createFile`) and item-replacement directories fail with EPERM in this sandbox. Plain writes, `rename`, `renamex_np`, `flock`, `fcntl` locks, and symlinks all work. SwiftPM relies on the failing path. The fix belongs to the sandbox or toolchain, not the repository.
@@ -626,7 +628,7 @@ A full build of the app needs Xcode for `xcodebuild`, signing, and running the a
 
 The menu bar label starts a sampling loop that refreshes every 10 seconds by default (5, 10, 30, or 60 seconds in Settings). The popover samples every two seconds by default (1, 2, or 5 seconds), and Refresh samples now.
 
-Not verified in this environment: the Xcode build, the app's windows and menu bar in a running app, the popover layout, the charts' appearance, light and dark mode, the Processes, Fleet, History, and Settings windows on screen, the Navigate shortcuts, notifications appearing, and launch at login. The packaged app was launched once for four seconds without a library-loading error, which is the only run-time check made. The views and previews typecheck as a module, and the app target typechecks. Nothing was rendered. The full status of each area is in [docs/verification.md](docs/verification.md).
+Not verified in this environment, which has no Xcode installed: the Xcode build, the app's windows and menu bar in a running app, the popover layout, the charts' appearance, light and dark mode, the Processes, Fleet, History, and Settings windows on screen, the Navigate shortcuts, notifications appearing, and launch at login. The packaged app was launched once for four seconds without a library-loading error, which is the only run-time check made. The views and previews typecheck as a module, and the app target typechecks. Nothing was rendered. The full status of each area is in [docs/verification.md](docs/verification.md).
 
 ## Run the agent
 
