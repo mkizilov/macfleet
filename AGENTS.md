@@ -33,9 +33,8 @@ Extend this file with the project's language-specific architecture and verificat
 
 ## Verification commands
 
-Run from the repository root. Use the project-local `.build` directory and the project-local cache paths documented in `README.md`.
+Run from the repository root.
 
-- Package tests: `swift test`
-- Agent run: `swift run macfleet-agent`
-- Release package build: `swift build -c release`
-- App build (requires full Xcode): `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build`
+- Verified in the restricted sandbox: `scripts/swiftc-verify.sh` (manifest, modules, UI typecheck, agent run, Swift Testing suites).
+- Expected on full Xcode, not verified here: `swift test`, `swift run macfleet-agent`, `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build`.
+- SwiftPM's build service fails here with EPERM on atomic writes. Do not treat that as a source error. See `README.md`.
