@@ -1,11 +1,12 @@
 # MacFleet
 
-MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. Its menu bar item shows CPU, memory, and network rates at a glance. The popover shows an overview, and a details view adds graphs, per-core load, storage, network, and the system summary. A separate command-line agent prints the same snapshot as JSON.
+MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. Its menu bar item shows the metrics you choose: CPU, memory, network, and startup disk, or the icon alone. The popover shows an overview, and a details view adds graphs, per-core load, storage, network, and the system summary. The app can also watch other Macs over an authenticated TLS connection, and the headless agent serves this Mac's metrics to them. The `macfleet-agent` command prints the snapshot as JSON.
 
 ## Requirements
 
 - macOS 14 or later (deployment target 14.0)
 - Full Xcode 16 or later, with its command-line tools selected (`xcode-select`), for building and running the app bundle
+- Command Line Tools with a Swift 6 toolchain for the verify, benchmark, and packaging scripts. They use `/Library/Developer/CommandLineTools` by default, and `DEV` or `SDK` override it. CI pins `DEVELOPER_DIR` to that path.
 
 ## Layout
 
@@ -34,9 +35,9 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetState/Alerts/HostAlertCenter.swift` | Per-Mac alert settings and state |
 | `Sources/MacFleetUI/Fleet/FleetHistoryView.swift` | The History window: charts, comparison, totals, retention, alerts, and export |
 | `Sources/MacFleetHeadless` | The `macfleet-headless` command: `run`, `status`, `addresses`, `identity`, `credential`, and `fetch` |
-| `Support/launchd` | The LaunchAgent template for the headless agent (not installed by the repository) |
+| `Support/launchd` | The LaunchAgent template for the headless agent. `scripts/install-agent.sh` fills it in and installs it for the current user; `--load` starts it |
 | `docs/remote-protocol.md` | Protocol specification: identity model, authentication, wire format, compatibility rules, and threat model |
-| `Sources/MacFleetKit/Networking` | Wire format for snapshots (no transport yet) |
+| `Sources/MacFleetKit/Networking` | The JSON snapshot format that `macfleet-agent` writes. The remote protocol has its own format in `Remote` |
 | `Sources/MacFleetState/History` | Bounded metric history for charts (`MetricHistory`) |
 | `Sources/MacFleetState/Presentation` | Presentation models: display values, spoken wording, usage levels, chart data. No SwiftUI |
 | `Sources/MacFleetState/Processes` | `ProcessMonitorModel`: samples processes only while the Processes window is open |
@@ -60,6 +61,19 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetKit/Hardware` | GPU devices and memory from Metal, thermal state, capability decisions, and mocked hardware scenarios |
 | `scripts/swiftc-history-check.sh` | Crash-consistency checks and storage measurements for the history store |
 | `scripts/swiftc-history-check/main.swift` | Driver for the crash checks, the torn-write case, and the benchmark |
+| `Config/` | Version metadata (`Version.xcconfig`), signing defaults (`Signing.xcconfig`), and the performance budgets. Local signing overrides go in the git-ignored `Config/Signing.local.xcconfig` |
+| `Sources/MacFleetKit/Release` | `MacFleetVersion`, the version the headless agent reports |
+| `Support/app` | The `Info.plist` template that `scripts/package-app.sh` fills in |
+| `scripts/check-release.sh` | Shell syntax, property lists, and version agreement with the Xcode project. Builds nothing |
+| `scripts/package-app.sh` | Release packages in `dist/`: the app and the headless agent, signed and checksummed |
+| `scripts/notarize.sh` | Optional notarization of a Developer ID package, using a notarytool profile you create |
+| `scripts/install-agent.sh`, `scripts/uninstall-agent.sh` | Plan-first install and removal of the headless agent for the current user |
+| `scripts/performance-check.sh` | Runs the benchmarks and fails when a measurement exceeds `Config/performance-budgets.env` |
+| `scripts/update-protocol-fixtures.sh`, `scripts/protocol-fixtures/` | Regenerates the protocol 1.0 wire fixtures, which the conformance tests compare byte for byte |
+| `.github/workflows/ci.yml` | CI on macOS 15: release files, build and tests, performance budgets, and an ad hoc package |
+| `docs/installation.md`, `docs/troubleshooting.md`, `docs/distribution.md` | Installing, common problems, and releasing: signing, notarization, budgets, and CI |
+| `docs/verification.md` | What is implemented, verified, partial, and unverified, with the command for each |
+| `ROADMAP.md` | Prioritized future work, with scope, dependencies, acceptance criteria, and effort |
 
 ## Hardware and thermal state
 
@@ -140,7 +154,7 @@ Each point holds CPU, memory, download and upload rates (summed over monitored i
 
 ### Retention
 
-`HistoryRetention` sets each tier's retention. It rejects values below the minimums the charts need: raw 2 hours, five-minute 2 days, hourly 8 days. The app uses the defaults. Retention is configurable in code but not yet in the UI.
+`HistoryRetention` sets each tier's retention. It rejects values below the minimums the charts need: raw 2 hours, five-minute 2 days, hourly 8 days. The local Mac uses the defaults. Each registered Mac can set its own retention in the History window, within the same minimums.
 
 ### Recovery
 
@@ -293,7 +307,7 @@ Colors are system colors (`.green`, `.orange`, `.red`, `.blue`, `.purple`) and h
 
 - Each sample does a fixed amount of work: one history append per series and one presentation build. Views read only presentation values and never compute during a body evaluation.
 - Histories are bounded at 120 samples per series.
-- Charts redraw only when their presentation value changes. Sampling runs every two seconds, so redraws happen at most at that rate.
+- Charts redraw only when their presentation value changes. The popover samples every two seconds by default (one, two, or five seconds in Settings), so redraws happen at most at that rate.
 - The model rebuilds the presentation once per sample and once per source toggle, so a toggle responds immediately.
 
 Measured numbers are in "Responsiveness measurement" below. Rendering time was not measured, because no window or display was driven.
@@ -368,7 +382,7 @@ The Processes window opens from **Processes** in the popover. It lists each proc
 - **Memory.** The physical footprint (`ri_phys_footprint`), the figure Activity Monitor shows as Memory.
 - **Identity.** A process is identified by PID and start time, so a reused PID starts over with no CPU baseline. A process whose start time is not read is identified by PID alone.
 - **Changing processes.** A process that exits between listing and reading is left out, and its baseline is dropped. A failed listing shows as one reason, never as an empty list.
-- **Sampling.** `ProcessMonitorModel` samples every two seconds only while the window is open. `processesDidDisappear` waits for the loop to stop. Sorting and search rebuild from the last sample and do not sample again.
+- **Sampling.** `ProcessMonitorModel` samples every two seconds by default (two, five, or ten seconds in Settings), only while the window is open. `processesDidDisappear` waits for the loop to stop. Sorting and search rebuild from the last sample and do not sample again.
 - **Deliberately not in `SamplingEngine`.** Process listings are not part of `SystemSnapshot`, history, or the wire format, and they run only while the window is open, so they have their own loop. Each sample is awaited before the next starts, so at most one listing is in flight. The libproc calls are synchronous and cannot be cancelled mid-call, so no deadline races them.
 
 ### Measured
@@ -382,7 +396,7 @@ Development Mac (arm64, macOS 27.2), optimized build, run as a standard user. 43
 | `/usr/bin/yes` child, CPU per sample, 2 s apart | 97.1–100.0% from the second sample on |
 | Presentation build for 433 rows, median / slowest of 50 | 4.2 ms / 14.7 ms, on the main actor, once per sample |
 
-The listing runs on the monitor actor, off the main thread. At this process count the window costs about 4 ms of main-thread work every two seconds.
+The listing runs on the monitor actor, off the main thread. At this process count, building the presentation took a median of 4.2 ms on the main actor (433 rows, measured with a scratch probe). It has not been re-measured since.
 
 ### Tests
 
@@ -491,7 +505,7 @@ Each Mac has its own stored history, keyed by a stable host ID: `local` for this
 - **Secrets.** The identity passphrase and each client secret go to the login keychain or to an owner-only file. The configuration file holds no secrets. The secret commands print nothing except the new client secret, once.
 - **Health and logs.** The status file is rewritten on every change and sample, and `status` applies the freshness rules. The log is owner-only, and it rotates at 5 MB.
 - **Shutdown.** Connected clients receive a `shuttingDown` notice before their sessions close.
-- **Automatic start.** `Support/launchd/com.macfleet.headless.plist` is a template with placeholders. Installing it is a manual step in the guide.
+- **Automatic start.** `scripts/install-agent.sh` fills in `Support/launchd/com.macfleet.headless.plist` and installs it for the current user, and `--load` starts it. The steps are in [docs/installation.md](docs/installation.md). Loading under launchd has not been tried on this Mac.
 
 ### Limitations
 
@@ -508,9 +522,18 @@ Run from the repository root.
 scripts/swiftc-verify.sh
 scripts/swiftc-benchmark.sh
 scripts/swiftc-history-check.sh
+scripts/check-release.sh
+scripts/performance-check.sh
+scripts/package-app.sh
 ```
 
 `scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, builds `macfleet-headless`, compiles and runs the Swift Testing suites, then runs `scripts/headless-smoke.sh`, which starts the headless agent as its own process and checks it end to end. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
+
+`scripts/check-release.sh` checks shell syntax, the property lists, and that the version agrees between `Config/Version.xcconfig`, the Xcode project, and the Swift constants. It builds nothing.
+
+`scripts/performance-check.sh` builds the optimized benchmarks and fails when a measurement exceeds `Config/performance-budgets.env`.
+
+`scripts/package-app.sh` writes the app and headless packages to `dist/`. It signs them ad hoc unless a Developer ID is supplied, verifies the signatures and the reported version, and writes checksums. `scripts/notarize.sh` needs a Developer ID and a notarytool profile, and was not run here. CI (`.github/workflows/ci.yml`) runs these on macOS 15 with the Command Line Tools. It has not run on GitHub from this repository.
 
 `scripts/swiftc-benchmark.sh` builds the kit and state layers with optimization and runs the dashboard benchmark. Its outputs are removed on exit.
 
@@ -518,7 +541,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 690 Swift Testing tests in 150 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, 61 cover multi-host history, and 62 cover settings, navigation, groups, and accessibility), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result (release review): manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 727 Swift Testing tests in 154 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, 70 cover the fleet dashboard, including real loopback sessions, 61 cover multi-host history, and 62 cover settings, navigation, groups, and accessibility; the other 332 cover the earlier layers, and 37 were added for the release work), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time). The app target typechecks in the same review, with no `@State` to replace (see the limitation below).
 
 The test suites cover:
 
@@ -539,6 +562,7 @@ The test suites cover:
 - Remote protocol: every message's encoding, the envelope and date format on the wire, compatibility with unknown types, fields, and error codes, framing and the frame limits, version negotiation, the authentication proofs and transcript binding, credential and fingerprint validation, the network policy, identity import and pin acceptance, and loopback TLS sessions. The sessions cover a full handshake, refused credentials, a wrong pin, a refused network, a version mismatch, no metrics before authentication, an idle client, heartbeats, and teardown. The loopback suite is serialized and uses ports 21401–21411. Its identity tests need macOS 15.
 - Alerts: settings values and persistence, the engine's sustained periods, hysteresis, cooldown, sleep and unavailable handling with a simulated clock, the model's permission and posting paths, the status model's path, and the presentation wording (see Alerts).
 - Processes: aggregation, sorting, search, and totals; the monitor's CPU windows, counter resets, exits during collection, PID reuse, and denied and failed listings; a live listing of this process and a busy-loop CPU check; presentation wording; and the model's sampling lifecycle.
+- Release and packaging: version agreement across `Config/Version.xcconfig`, the Xcode project, and the Swift constants; the CI workflow's runner and toolchain; script syntax and property lists; the protocol 1.0 fixtures, compared byte for byte; the agent installer and uninstaller in a scratch folder, including the template path in a package, purge safety, and damaged manifests; the headless configuration's defaults; and the deadline race, including work that ignores cancellation.
 
 ## Responsiveness measurement
 
@@ -546,12 +570,12 @@ The test suites cover:
 
 | Measure | Run 1 | Run 2 |
 | --- | --- | --- |
-| Mean per sample | 39.2 µs | 43.2 µs |
-| Median per sample | 36.0 µs | 40.0 µs |
-| 95th percentile | 43.0 µs | 53.0 µs |
-| Worst single sample | 3.1 ms | 2.8 ms |
+| Mean per sample | 46.9 µs | 48.6 µs |
+| Median per sample | 45.0 µs | 44.0 µs |
+| 95th percentile | 51.0 µs | 61.0 µs |
+| Worst single sample | 2.4 ms | 3.1 ms |
 
-Both runs show a worst-case sample of about 3 ms. That is consistent with a one-time warm-up, but I did not verify the cause. The history stayed at 120 samples per series. Those numbers cover data work only. Rendering the charts and the popover was not measured, because no display was driven. Frame rates are unverified.
+Both runs were taken in the release review. Each has one worst sample of 2.4 to 3.1 ms among 2,000, and its cause is not known. The median is the figure the budget gates (a 2 ms ceiling, in `Config/performance-budgets.env`). The history stayed at 120 samples per series. These numbers cover data work only. Rendering the charts and the popover was not measured, because no display was driven, so frame rates are unverified.
 
 ## Accuracy check against system tools
 
@@ -568,14 +592,15 @@ Taken on the development Mac (arm64, 10 logical CPUs, 16 GB, macOS 27.2 build 26
 
 ## Known limitation: SwiftPM in restricted sandboxes
 
-`swift build`, `swift test`, and `swift run macfleet-agent` do not work in the current restricted repository sandbox. Two failures were observed with the Command Line Tools toolchain (Swift 6.4.2):
+`swift build`, `swift test`, and `swift run macfleet-agent` do not complete in the restricted repository sandbox. Checked in the release review with the Command Line Tools toolchain (Swift 6.4.2):
 
-- Default build system: `unexpected service error: unable to write manifest to .../XCBuildData/.../manifest.json` (EPERM).
-- `--build-system native`: `I/O error ... output-file-map.json`, because SwiftPM never produces that file.
+- SwiftPM runs each package manifest inside its own `sandbox-exec`, and this sandbox refuses to nest one (`sandbox_apply: Operation not permitted`). `--disable-sandbox` turns off only that inner manifest sandbox, and the repository's outer sandbox still applies. With it, the manifest compiles and the test fixtures are declared, so the unhandled-file warning is gone.
+- The build then stops in the build service. The default build system reports `unable to write manifest to .../XCBuildData/...` (EPERM).
+- `--build-system native` stops with `I/O error ... output-file-map.json`.
 
-Cause: Foundation's atomic writes (`Data.write(options: .atomic)`, `FileManager.createFile`) and item-replacement directories fail with EPERM in this sandbox. Plain writes, `rename`, `renamex_np`, `flock`, `fcntl` locks, and symlinks all work. SwiftPM relies on the failing path. The fix belongs to the sandbox or toolchain, not the repository.
+Cause of the build-service failure: Foundation's atomic writes (`Data.write(options: .atomic)`, `FileManager.createFile`) and item-replacement directories fail with EPERM in this sandbox. Plain writes, `rename`, `renamex_np`, `flock`, `fcntl` locks, and symlinks all work. SwiftPM relies on the failing path. The fix belongs to the sandbox or toolchain, not the repository.
 
-SwiftPM is expected to work on a normal Mac with full Xcode. That expectation is unverified here. On such a machine, run `swift test` and `swift run macfleet-agent`.
+On a Mac with full Xcode, `swift test` and `swift run macfleet-agent` are expected to work. This project has not run them.
 
 ## Known limitation: SwiftData
 
@@ -583,11 +608,11 @@ SwiftData is not used. Its `@Model` macro plugin is missing from the Command Lin
 
 ## Known limitation: SwiftUI macros in the Command Line Tools
 
-The Command Line Tools do not ship the SwiftUI macro plugin, so the `@State` property wrapper cannot be expanded there. For that reason the UI module uses no property wrappers. Views take presentation values and action closures, and the model holds the expanded state. The app target still uses `@State` for its model, so its full build needs Xcode.
+The Command Line Tools do not ship the SwiftUI macro plugin, so `@State` cannot be expanded there. A minimal probe fails with `StateMacro` not found, as checked in the release review. For that reason the UI module uses no property wrappers. Views take presentation values and action closures, and the model holds the expanded state. The app target uses no `@State`, so it typechecks with the Command Line Tools.
 
 ## Build and launch the menu bar app (full Xcode)
 
-The app target needs Xcode because SwiftUI's `@State` macro plugin ships only with Xcode, not with the Command Line Tools.
+A full build of the app needs Xcode for `xcodebuild`, signing, and running the app. The packaged app, built by `scripts/package-app.sh`, does not need Xcode.
 
 1. Open `MacFleet.xcodeproj` in Xcode.
 2. Select the `MacFleet` scheme and the `My Mac` destination.
@@ -599,9 +624,9 @@ The app target needs Xcode because SwiftUI's `@State` macro plugin ships only wi
 
 4. Launch the built `MacFleet.app` from the `DerivedData` products folder shown in the build log. The app has no Dock icon (`LSUIElement`). Its menu bar item shows the compact statistics. Click it to open the popover, use Show details to expand it, then use Refresh or Quit.
 
-The menu bar label starts a sampling loop that refreshes every two seconds. Opening the popover or pressing Refresh also samples.
+The menu bar label starts a sampling loop that refreshes every 10 seconds by default (5, 10, 30, or 60 seconds in Settings). The popover samples every two seconds by default (1, 2, or 5 seconds), and Refresh samples now.
 
-Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, the Sources toggles, the Processes window (its opening, layout, and sampling stopping when it closes), and the Settings window, its Windows menu, and notifications appearing on screen. The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
+Not verified in this environment: the Xcode build, the app's windows and menu bar in a running app, the popover layout, the charts' appearance, light and dark mode, the Processes, Fleet, History, and Settings windows on screen, the Navigate shortcuts, notifications appearing, and launch at login. The packaged app was launched once for four seconds without a library-loading error, which is the only run-time check made. The views and previews typecheck as a module, and the app target typechecks. Nothing was rendered. The full status of each area is in [docs/verification.md](docs/verification.md).
 
 ## Run the agent
 
@@ -615,15 +640,15 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 
 ## Assumptions
 
-- The bundle identifier `dev.macfleet.MacFleet` is a placeholder. Change `PRODUCT_BUNDLE_IDENTIFIER` before signing for distribution.
-- The app is ad-hoc signed for local runs (`CODE_SIGN_IDENTITY = "-"`). No team is configured.
+- The bundle identifier `dev.macfleet.MacFleet` is a placeholder. Change `MACFLEET_BUNDLE_ID` in `Config/Version.xcconfig` and the Xcode project together. `scripts/check-release.sh` fails if they disagree.
+- The app is ad-hoc signed by default (`Config/Signing.xcconfig`). No team is configured. No Developer ID or notarization has been run. See [docs/distribution.md](docs/distribution.md).
 - The menu bar icon is an SF Symbol (`server.rack`) rather than a custom asset.
 - Snapshots are local to this Mac. The remote protocol is implemented in `MacFleetKit`, and the headless agent serves it. The menu bar app does not serve it. `FleetWireFormat` still defines the `macfleet-agent` JSON payload.
 - Memory now uses the binary formatter everywhere, so a memory total shows as "16 GB". The earlier popover used the system memory style, which can differ slightly.
 - Usage is shown as Elevated from 75% and Critical from 90%, for CPU, memory, and disks alike. Pressure maps warning to elevated and critical to critical.
 - Not included: interface MAC addresses, IPv6 addresses, wireless details, per-volume I/O throughput, and per-process network use.
 - The Xcode project has no test targets. Tests run through `scripts/swiftc-verify.sh` or `swift test`.
-- Alert settings live in user defaults under `MacFleet.alertSettings`, not in a file, so they are per user account on this Mac. The alert hysteresis margins and the sustained and cooldown limits are fixed in code and in `AlertRule`.
+- Alert settings live in user defaults under `MacFleet.alertSettings`, not in a file, so they are per user account on this Mac. Per-Mac alert settings use `MacFleet.hostAlertSettings`. The alert hysteresis margins and the sustained and cooldown limits are fixed in code and in `AlertRule`.
 - The Xcode project file is hand-written. It passes `plutil -lint`, but Xcode has not opened it here.
 - Snapshot JSON has gained `cpu`, `memory`, `memoryPressure`, `volumes`, `network`, and `hardware` fields. Payloads from earlier builds without them no longer decode. No deployed consumers existed.
 - `snapshot()` changed to `snapshot(selection:)` as the protocol requirement. The no-argument form remains as a convenience, so existing call sites are unchanged.

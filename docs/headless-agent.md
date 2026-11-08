@@ -107,7 +107,7 @@ On SIGTERM or SIGINT the agent tells each connected client that it is shutting d
 
 ## Automatic start with launchd
 
-`Support/launchd/com.macfleet.headless.plist` is a user LaunchAgent template. It restarts the agent after a failure but not after a clean stop. The repository does not install it. Follow this checklist on the Mac that will run the agent:
+`Support/launchd/com.macfleet.headless.plist` is a user LaunchAgent template. It restarts the agent after a failure but not after a clean stop. `scripts/install-agent.sh` installs it for the current user, as [installation.md](installation.md) describes. The checklist below does the same steps by hand:
 
 1. Copy the binary to a fixed location, such as `~/Library/MacFleet/bin/macfleet-headless`.
 2. Copy the plist to a temporary file. Replace each placeholder with an absolute path: `__MACFLEET_HEADLESS_BINARY__`, `__MACFLEET_HEADLESS_CONFIG__`, and `__MACFLEET_LOG_DIRECTORY__`. Use `sed` to write the result.
@@ -123,12 +123,13 @@ If Tailscale is not connected when the user logs in, the listener address is not
 
 - **Automated, run here.** `scripts/headless-smoke.sh` runs as part of `scripts/swiftc-verify.sh`. It builds an identity and secrets in a temporary directory, starts the real binary, takes two snapshots through the real client over TLS on loopback, refuses a wrong secret, stops the agent with SIGTERM, and checks the exit code, the status file, the log, and that the secret appears in no output.
 - **In-process integration tests.** `HeadlessAgentIntegrationTests` run a real agent and real TLS clients on loopback ports 21421 to 21432. They cover snapshots, the status report, a disabled listener, a wrong secret and its log record, a disconnecting client, graceful shutdown with the notice, a failed sample, a listener that cannot bind, a missing secret, a second run, and an untrusted pin.
-- **Unit tests.** Configuration validation, secret store permissions, the log format and rotation, health rules, and local address classification.
+- **Unit tests.** Configuration validation and its documented defaults, secret store permissions, the log format and rotation, health rules, and local address classification.
+- **Installer and uninstaller.** `AgentInstallScriptTests` run both scripts in a scratch folder. They cover the plan-only default, applying, the template in a package layout, keeping an existing configuration, purge safety, and damaged manifests. No test loads a LaunchAgent.
 
 ## Not verified
 
 - A real tailnet, and a client on another Mac.
-- The launchd installation. The plist lints, but it was not loaded.
+- The launchd installation. The plist lints, and the installer writes it into a scratch folder, but no agent was loaded with `launchctl` on any Mac.
 - The keychain store. Automated tests do not change the keychain, so `KeychainSecretStore` compiles but was not exercised.
 - Login behaviour: whether the agent starts at login, and whether the listener is ready before Tailscale connects.
 - Long-running stability and log rotation under real load.

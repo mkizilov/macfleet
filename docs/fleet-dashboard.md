@@ -63,6 +63,7 @@ When a Mac's certificate changes, the card says so and shows the new fingerprint
 ## Limits
 
 - At most 16 remote Macs are monitored, because each holds a connection and a retry clock.
+- Each remote Mac reports at the rate chosen in Settings: 10 seconds by default, or 5 or 30 seconds. An open session reopens at a new rate.
 - The local card and each remote card are built from the same projection, so the metrics mean the same thing on both.
 - A Mac that is offline keeps its last snapshot, labelled as not current, rather than showing zero or hiding the card.
 - The app does not sample remote Macs itself. Each Mac reports its own readings through its agent.

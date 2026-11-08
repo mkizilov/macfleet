@@ -153,8 +153,8 @@ The capabilities list has one entry per metric, with a state:
 | Metrics from an unauthenticated peer | Nothing is sent before the client proof verifies | None known. |
 | Peers outside the private networks | Network policy closes them before TLS | A peer inside an allowed network can still open connections. |
 | Oversized or endless input | Frame cap, decoder limits, session cap, deadlines | No per-address rate limit. Connections are capped at 8 sessions in total, and connections that stall before authenticating count against that cap until their handshake deadline passes. |
-| Brute force of a secret | The secret is 256 bits | Failed attempts are not rate-limited or logged. |
-| Compromised client secret | Secrets are per client | The secret is kept in memory by the caller. No keychain storage is implemented. |
+| Brute force of a secret | The secret is 256 bits | Failed attempts are logged (`auth.failed`, with no secret) but not rate-limited. |
+| Compromised client secret | Secrets are per client | The agent keeps them in the login keychain or an owner-only file. The app keeps them in the login keychain. The keychain path is not exercised by the automated tests. |
 
 ## Verification status
 
@@ -167,12 +167,13 @@ Verified on the development Mac with `scripts/swiftc-verify.sh`:
 - Authentication: proofs, role separation, a changed field of the transcript, credential validation, and fingerprints.
 - The network policy, including the Tailscale ranges and IPv4-mapped addresses.
 - The identity import, a wrong passphrase, and pin acceptance.
+- Protocol 1.0 fixtures: every catalogued message is encoded and compared byte for byte with a stored fixture, and each fixture decodes back to its message. Regenerate them only with `scripts/update-protocol-fixtures.sh`.
 - Loopback TLS sessions: a complete session, a wrong secret, an unknown client, a wrong pin, a refused network, a version mismatch, a client that sends `subscribe` before authenticating, a client that waits without a proof, an idle client, heartbeats keeping a quiet session open, and session teardown when the client stops.
 
 Not verified:
 
 - A real tailnet. The Tailscale ranges are unit-tested, and loopback is tested end to end, but no tailnet peer was used.
-- Certificate expiry. The basic X.509 check should reject an expired certificate, but no expired certificate was tested.
+- Expiry during a running session, and any warning before a certificate expires. An expired certificate made with `openssl ca` is rejected by the pinned check on loopback, which is the only expiry case tested.
 - EC identities and identities from other tools.
-- macOS 14. Identity import needs macOS 15, so the identity tests are skipped there.
-- The host as a running app or command. This turn adds the library only, with no entry point and no persisted configuration.
+- macOS 14. The host refuses to load an identity there, and the identity tests need macOS 15. CI runs on macOS 15.
+- The headless agent as an installed launchd service on a Mac. The app's client against a real agent on another Mac.
