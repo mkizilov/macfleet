@@ -13,6 +13,7 @@ public struct ProcessSystemMetricsProvider: SystemMetricsProviding {
         let storage: any MetricProvider<[VolumeMetrics]>
         let network: any MetricProvider<[NetworkInterfaceMetrics]>
         let load: any MetricProvider<LoadAverage>
+        let hardware: any MetricProvider<HardwareSample>
     }
 
     private let sections: Sections
@@ -25,6 +26,7 @@ public struct ProcessSystemMetricsProvider: SystemMetricsProviding {
         counters: any HostCounterSource = MachHostCounters(),
         volumes: any VolumeSource = FileManagerVolumeSource(),
         interfaces: any InterfaceSource = SystemInterfaceSource(),
+        hardware: HardwareMetricProvider = .live,
         minimumCPUWindow: TimeInterval = 1,
         minimumNetworkWindow: TimeInterval = 1,
         clock: @escaping @Sendable () -> TimeInterval = { MonotonicTime.awakeSeconds() },
@@ -36,7 +38,8 @@ public struct ProcessSystemMetricsProvider: SystemMetricsProviding {
             pressure: MemoryPressureMetricProvider(counters: counters),
             storage: StorageMetricProvider(volumes: volumes),
             network: NetworkMetricProvider(interfaces: interfaces, minimumWindow: minimumNetworkWindow),
-            load: LoadAverageMetricProvider()
+            load: LoadAverageMetricProvider(),
+            hardware: hardware
         )
         self.clock = clock
         self.sampleTimeout = sampleTimeout
@@ -55,6 +58,7 @@ public struct ProcessSystemMetricsProvider: SystemMetricsProviding {
         async let pressure = sample(sections.pressure, context)
         async let volumes = sample(sections.storage, context)
         async let network = sample(sections.network, context)
+        async let hardware = sample(sections.hardware, context)
         let load = await sample(sections.load, context)
 
         guard let average = load.availableValue else {
@@ -73,7 +77,8 @@ public struct ProcessSystemMetricsProvider: SystemMetricsProviding {
             memory: await memory,
             memoryPressure: await pressure,
             volumes: await volumes,
-            network: await network
+            network: await network,
+            hardware: await hardware
         )
     }
 

@@ -32,8 +32,60 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `scripts/swiftc-test-runner/main.swift` | Entry point that runs the Swift Testing suites from the script |
 | `scripts/swiftc-benchmark/main.swift` | Benchmark driver for the script above |
 | `Sources/MacFleetKit/History` | Historical metrics: SQLite store, tiers, rollup, retention, recovery, and history series |
+| `Sources/MacFleetKit/Hardware` | GPU devices and memory from Metal, thermal state, capability decisions, and mocked hardware scenarios |
 | `scripts/swiftc-history-check.sh` | Crash-consistency checks and storage measurements for the history store |
 | `scripts/swiftc-history-check/main.swift` | Driver for the crash checks, the torn-write case, and the benchmark |
+
+## Hardware and thermal state
+
+MacFleet reports only what a documented public API provides. Every measurement has a declared capability: **supported**, **permission needed**, or **not available** on this Mac. A measurement that is not supported is not read, and its reason appears where its value would be, never as zero.
+
+### Sources and capability on the development Mac
+
+The development Mac is an Apple M4 running macOS 27.2.
+
+| Measurement | Public source | Capability here | Reading here |
+| --- | --- | --- | --- |
+| GPU devices | `MTLCopyAllDevices`; `MTLDevice` name, registry ID, `architecture`, `hasUnifiedMemory`, `supportsRaytracing`, `maxThreadsPerThreadgroup`, `supportsFamily` | Supported | One unified GPU, "Apple M4", architecture `applegpu_g16g`, ray tracing, Apple 1–9, Mac 2, Metal 3 and Metal 4 |
+| GPU memory | `recommendedMaxWorkingSetSize` (working-set limit) and `currentAllocatedSize` (Metal allocations) | Supported | Working-set limit 12,713,115,648 bytes; 81,920 bytes allocated |
+| Thermal state | `ProcessInfo.thermalState` (nominal, fair, serious, critical) | Supported | Nominal |
+| GPU utilization | None. The SDK has no public interface for system-wide GPU utilization. Metal counters measure only work the app submits itself | Not available | No value. The reason is shown |
+| CPU temperature | None. macOS has no documented interface for temperature sensors | Not available | No value. The reason is shown |
+
+No measurement this app reads is permission-gated on this Mac, so no live reading is permission-restricted. The permission-restricted state is wired through the reading path and is exercised by mocked hardware in the tests.
+
+### Rules
+
+- No undocumented interface is read. The IORegistry performance statistics and SMC temperature keys are private, so they are not used.
+- Apple has deprecated `lowPower`, `headless`, `removable`, and `location` as "not applicable on Apple Silicon". They are not used.
+- A working-set limit of zero is reported as "not reported", not as 0 B.
+- Thermal state is sampled, not observed. It can lag a change by up to one sampling interval: 2 seconds with the popover open, 10 seconds otherwise.
+- A value exists exactly when its capability is supported. The tests check this for every mocked Mac.
+
+### Capability system
+
+`MetricCapability` is `supported`, `permissionRestricted(reason)`, or `unavailable(reason)`. `HardwareCapabilities` holds one per measurement. A source declares its capability before any read, and the provider reads it only when the capability is supported. A read that fails with a permission denial upgrades a supported capability to permission-restricted. Other transient failures keep the capability and show the cause in the reading.
+
+The hardware section is one independent section of the composed snapshot, so it has its own deadline. A hardware section that times out does not delay CPU, memory, storage, or network.
+
+### Measured
+
+- One hardware sample, optimized build, 2,000 calls: about 2.4 µs once Metal is warm. Enumeration with device descriptions averaged 5.7 µs, including the first call's setup.
+
+### Tests
+
+- **Mocked Macs.** Four scenarios: an Apple silicon laptop; a workstation with a discrete GPU, an integrated GPU with no memory limit, mocked supported utilization, and restricted temperature; a virtual machine with no GPU; and a Mac whose GPU enumeration is refused.
+- **Gating.** Unavailable and restricted sources are never read. The mocks count their reads to prove it.
+- **Capability decisions.** Every transition between the three states, including transient failures that must not change the capability.
+- **Presentation.** Every status, reason, and value for each scenario, and a check that no unavailable measurement renders as zero.
+- **Live.** Metal reports at least one named GPU with families and a working-set limit. Utilization and temperature are asserted to be unavailable. If a future release adds a public API, this test fails and forces a deliberate change.
+
+### Limitations
+
+- The hardware card was typechecked, not rendered in a running app.
+- The permission-restricted path has been exercised only with mocks.
+- Only the GPUs Metal enumerates are reported. External GPUs were not present here and are not tested.
+- The capability list and every mocked device name are mock values and are labelled as such in the tests.
 
 ## Historical metrics
 
@@ -288,7 +340,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 251 Swift Testing tests in 57 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 295 Swift Testing tests in 69 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -389,5 +441,5 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 - Not included: interface MAC addresses, IPv6 addresses, wireless details, per-volume I/O throughput, and per-process network use.
 - The Xcode project has no test targets. Tests run through `scripts/swiftc-verify.sh` or `swift test`.
 - The Xcode project file is hand-written. It passes `plutil -lint`, but Xcode has not opened it here.
-- Snapshot JSON has gained `cpu`, `memory`, `memoryPressure`, `volumes`, and `network` fields. Payloads from earlier builds without them no longer decode. No deployed consumers existed.
+- Snapshot JSON has gained `cpu`, `memory`, `memoryPressure`, `volumes`, `network`, and `hardware` fields. Payloads from earlier builds without them no longer decode. No deployed consumers existed.
 - `snapshot()` changed to `snapshot(selection:)` as the protocol requirement. The no-argument form remains as a convenience, so existing call sites are unchanged.

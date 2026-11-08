@@ -102,6 +102,7 @@ public struct DashboardPresentation: Equatable, Sendable {
     public let storage: StoragePresentation
     public let network: NetworkPresentation
     public let sources: SourcesPresentation
+    public let hardware: HardwarePresentation
 
     public init(snapshot: SystemSnapshot, history: MetricHistory, selection: MonitoringSelection) {
         summary = SummaryPresentation(snapshot: snapshot)
@@ -114,6 +115,7 @@ public struct DashboardPresentation: Equatable, Sendable {
         storage = StoragePresentation(reading: snapshot.volumes)
         network = NetworkPresentation(reading: snapshot.network, history: history)
         sources = SourcesPresentation(snapshot: snapshot, selection: selection)
+        hardware = HardwarePresentation(sample: snapshot.hardware)
         menuBar = MenuBarPresentation(
             cpu: cpu.total,
             memory: memory.usage,

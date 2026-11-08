@@ -71,7 +71,8 @@ public struct SimulatedMetricsTimeline: Sendable {
             memory: .available(memory),
             memoryPressure: .available(pressure),
             volumes: .available(volumes(selection: selection)),
-            network: .available(interfaces(selection: selection))
+            network: .available(interfaces(selection: selection)),
+            hardware: MockHardwareScenario.appleSiliconLaptop.sample(thermal: total > 0.6 ? .fair : .nominal)
         )
     }
 

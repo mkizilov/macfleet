@@ -37,7 +37,8 @@ public struct MockSystemMetricsProvider: SystemMetricsProviding {
                 totals: .available(NetworkTotals(bytesReceived: 12_000_000_000, bytesSent: 3_000_000_000)),
                 rates: .available(NetworkRate(receivedPerSecond: 1_200_000, sentPerSecond: 40_000))
             ),
-        ])
+        ]),
+        hardware: MockHardwareScenario.appleSiliconLaptop.sample()
     )
 
     private let result: Result<SystemSnapshot, any Error>

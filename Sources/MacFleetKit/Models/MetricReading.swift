@@ -16,6 +16,10 @@ public enum MetricIssue: Error, Codable, Equatable, Sendable {
     case inconsistentMemoryAccounting
     case inconsistentStorageCounters
     case timedOut
+    /// No public API reports this measurement on this Mac or macOS version. The reason says why.
+    case unsupported(reason: String)
+    /// The measurement exists but needs access the user has not granted. The reason says what to grant.
+    case permissionRestricted(reason: String)
 }
 
 extension MetricIssue: LocalizedError {
@@ -51,6 +55,8 @@ extension MetricIssue: LocalizedError {
             "Volume capacity counters are inconsistent"
         case .timedOut:
             "Sampling timed out"
+        case let .unsupported(reason), let .permissionRestricted(reason):
+            reason
         }
     }
 }

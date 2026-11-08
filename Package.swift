@@ -11,7 +11,7 @@ let package = Package(
         .executable(name: "macfleet-agent", targets: ["MacFleetAgent"]),
     ],
     targets: [
-        .target(name: "MacFleetKit", linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "MacFleetKit", linkerSettings: [.linkedLibrary("sqlite3"), .linkedFramework("Metal")]),
         .target(name: "MacFleetState", dependencies: ["MacFleetKit"]),
         .target(name: "MacFleetUI", dependencies: ["MacFleetState"]),
         .executableTarget(name: "MacFleetAgent", dependencies: ["MacFleetKit"]),

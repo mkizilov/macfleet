@@ -25,6 +25,7 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
     public let memoryPressure: MetricReading<MemoryPressureLevel>
     public let volumes: MetricReading<[VolumeMetrics]>
     public let network: MetricReading<[NetworkInterfaceMetrics]>
+    public let hardware: MetricReading<HardwareSample>
 
     public init(
         capturedAt: Date,
@@ -38,7 +39,8 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
         memory: MetricReading<MemoryUsage> = .unavailable(.notSampled),
         memoryPressure: MetricReading<MemoryPressureLevel> = .unavailable(.notSampled),
         volumes: MetricReading<[VolumeMetrics]> = .unavailable(.notSampled),
-        network: MetricReading<[NetworkInterfaceMetrics]> = .unavailable(.notSampled)
+        network: MetricReading<[NetworkInterfaceMetrics]> = .unavailable(.notSampled),
+        hardware: MetricReading<HardwareSample> = .unavailable(.notSampled)
     ) {
         self.capturedAt = capturedAt
         self.hostName = hostName
@@ -52,5 +54,6 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
         self.memoryPressure = memoryPressure
         self.volumes = volumes
         self.network = network
+        self.hardware = hardware
     }
 }

@@ -36,9 +36,20 @@ private func cpu(user: UInt32, idle: UInt32) -> CPUTicks {
     CPUTicks(user: user, system: 0, idle: idle, nice: 0)
 }
 
+/// A hardware section that never returns in time.
+private struct HangingHardwareProvider: MetricProvider {
+    typealias Output = HardwareSample
+
+    func sample(_ context: SampleContext) async -> MetricReading<HardwareSample> {
+        try? await Task.sleep(for: .seconds(60))
+        return .unavailable(.notSampled)
+    }
+}
+
 private func sections(
     cpu: any MetricProvider<CPUUtilization> = CPUMetricProvider(counters: MockHostCounters()),
-    load: any MetricProvider<LoadAverage> = LoadAverageMetricProvider()
+    load: any MetricProvider<LoadAverage> = LoadAverageMetricProvider(),
+    hardware: any MetricProvider<HardwareSample> = MockHardwareScenario.appleSiliconLaptop.provider()
 ) -> ProcessSystemMetricsProvider.Sections {
     ProcessSystemMetricsProvider.Sections(
         cpu: cpu,
@@ -55,7 +66,8 @@ private func sections(
         pressure: MemoryPressureMetricProvider(counters: MockHostCounters(pressureLevel: [.success(1)])),
         storage: StorageMetricProvider(volumes: MockVolumeSource([.success([])])),
         network: NetworkMetricProvider(interfaces: MockInterfaceSource([.success([])])),
-        load: load
+        load: load,
+        hardware: hardware
     )
 }
 
@@ -130,5 +142,29 @@ struct SectionCompositionTests {
         await provider.resetBaselines()
         clock.set(4)
         #expect(try await provider.snapshot(selection: .all).cpu == .unavailable(.notSampled))
+    }
+}
+
+@Suite("Hardware section in the composed snapshot")
+struct HardwareSectionCompositionTests {
+    @Test func everySnapshotCarriesTheHardwareSample() async throws {
+        let provider = ProcessSystemMetricsProvider(sections: sections(), clock: { 0 }, sampleTimeout: .seconds(2))
+        let snapshot = try await provider.snapshot(selection: .all)
+        #expect(snapshot.hardware == MockHardwareScenario.appleSiliconLaptop.sample())
+    }
+
+    @Test func aHangingHardwareSectionTimesOutWithoutDelayingTheRest() async throws {
+        let provider = ProcessSystemMetricsProvider(
+            sections: sections(hardware: HangingHardwareProvider()),
+            clock: { 0 },
+            sampleTimeout: .milliseconds(50)
+        )
+        let started = MonotonicTime.awakeSeconds()
+
+        let snapshot = try await provider.snapshot(selection: .all)
+
+        #expect(snapshot.hardware == .unavailable(.timedOut))
+        #expect(snapshot.memory.availableValue?.totalBytes != nil)
+        #expect(MonotonicTime.awakeSeconds() - started < 5)
     }
 }

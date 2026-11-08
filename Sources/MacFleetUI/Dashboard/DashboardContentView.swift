@@ -36,6 +36,7 @@ public struct DashboardContentView: View {
                 MemoryCard(memory: dashboard.memory)
                 StorageCard(storage: dashboard.storage)
                 NetworkCard(network: dashboard.network)
+                HardwareCard(hardware: dashboard.hardware)
                 HistoryCard(history: history, onSelectRange: onSelectHistoryRange)
                 SummaryCard(summary: dashboard.summary)
                 SourcesSection(
@@ -58,6 +59,7 @@ private struct OverviewCard: View {
             UsageGauge(title: "Disk", usage: dashboard.storage.primaryUsage)
             ReadoutRow(label: "Download", value: dashboard.network.download)
             ReadoutRow(label: "Upload", value: dashboard.network.upload)
+            ReadoutRow(label: "Thermal", value: dashboard.hardware.thermalOverview)
         }
     }
 }
