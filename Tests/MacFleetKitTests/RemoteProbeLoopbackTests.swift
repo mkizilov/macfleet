@@ -4,7 +4,7 @@ import Testing
 @testable import MacFleetKit
 
 /// Probes against real TLS hosts on loopback. Ports come from 21441 to 21443, and the suite runs serially.
-@Suite("Remote host probe over loopback TLS", .serialized, .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
+@Suite("Remote host probe over loopback TLS", .serialized, .timeLimit(.minutes(1)), .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
 struct RemoteProbeLoopbackTests {
     private func startHost(
         port: UInt16,

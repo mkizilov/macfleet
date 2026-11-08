@@ -4,6 +4,7 @@
 # Outputs go to .agent-local and are removed on exit. TRIALS sets the number of kill trials (default 30).
 set -eu
 cd "$(dirname "$0")/.."
+. scripts/lib/bounded.sh
 
 SDK="${SDK:-/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk}"
 OUT="$PWD/.agent-local/swiftc-history-check"
@@ -20,5 +21,5 @@ swiftc -emit-library -emit-module -parse-as-library -module-name MacFleetKit \
 swiftc -module-name history_check -I "$OUT" -L "$OUT" -lMacFleetKit $COMMON -enable-testing \
   -Xlinker -rpath -Xlinker "$OUT" -o "$OUT/history-check" scripts/swiftc-history-check/main.swift
 
-"$OUT/history-check" crash "$OUT/data" "${TRIALS:-30}"
-"$OUT/history-check" benchmark "$OUT/data"
+run_bounded 1800 "$OUT/history-check" crash "$OUT/data" "${TRIALS:-30}"
+run_bounded 1800 "$OUT/history-check" benchmark "$OUT/data"

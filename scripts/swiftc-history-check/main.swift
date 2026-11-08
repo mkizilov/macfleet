@@ -144,9 +144,7 @@ func runCrashTrials(directory: String, trials: Int) async throws -> Bool {
                 throw HarnessError(description: "could not create \(log.path) (errno \(errno))")
             }
 
-            let child = Process()
-            child.executableURL = executable
-            child.arguments = ["writer", file.path, mode]
+            let child = boundedWriter(executable, ["writer", file.path, mode])
             child.standardOutput = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
             try child.run()
             usleep(UInt32(Double.random(in: 0.3...1.5) * 1_000_000))
@@ -258,15 +256,22 @@ func runTornWriter(path: String) async throws {
     kill(getpid(), SIGKILL)
 }
 
+/// A writer child that stops itself after two minutes, even when this harness dies first. Perl's alarm keeps the child's pid,
+/// so the harness's SIGKILL still reaches the writer.
+func boundedWriter(_ executable: URL, _ arguments: [String]) -> Process {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+    child.arguments = ["-e", "alarm shift; exec @ARGV or exit 127", "120", executable.path] + arguments
+    return child
+}
+
 func runTornTrials(directory: String, trials: Int) async throws -> Bool {
     let root = URL(fileURLWithPath: directory, isDirectory: true)
     let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
     var allOK = true
     for trial in 1...trials {
         let file = root.appendingPathComponent("torn-\(trial).sqlite")
-        let child = Process()
-        child.executableURL = executable
-        child.arguments = ["writer", file.path, "torn"]
+        let child = boundedWriter(executable, ["writer", file.path, "torn"])
         try child.run()
         child.waitUntilExit()
         let killedAsPlanned = child.terminationReason == .uncaughtSignal && child.terminationStatus == SIGKILL

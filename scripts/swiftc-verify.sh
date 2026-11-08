@@ -2,8 +2,10 @@
 # Builds, tests and runs MacFleet with swiftc only. SwiftPM's build service cannot
 # write its databases in the restricted repository sandbox (see README.md), so this
 # script is the verified path there. Outputs go to .agent-local/swiftc-build (git-ignored).
+# TEST_TIMEOUT bounds the Swift Testing run, in seconds (default 900). A run that exceeds it is stopped and fails.
 set -eu
 cd "$(dirname "$0")/.."
+. scripts/lib/bounded.sh
 
 DEV="${DEV:-/Library/Developer/CommandLineTools}"
 SDK="${SDK:-$DEV/SDKs/MacOSX.sdk}"
@@ -39,7 +41,7 @@ swiftc -typecheck -parse-as-library -module-name MacFleetUI -I "$OUT" $COMMON \
 echo "== macfleet-agent"
 swiftc -module-name macfleet_agent -I "$OUT" -L "$OUT" -lMacFleetKit $COMMON \
   -Xlinker -rpath -Xlinker "$OUT" -o "$OUT/macfleet-agent" Sources/MacFleetAgent/main.swift
-"$OUT/macfleet-agent" > /dev/null
+run_bounded 120 "$OUT/macfleet-agent" > /dev/null
 
 echo "== macfleet-headless"
 swiftc -module-name macfleet_headless -I "$OUT" -L "$OUT" -lMacFleetKit $COMMON \
@@ -51,7 +53,7 @@ swiftc -module-name MacFleetTests -I "$OUT" -L "$OUT" -lMacFleetKit -lMacFleetSt
   -Xlinker -rpath -Xlinker "$OUT" -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$INTEROP" \
   -o "$OUT/macfleet-tests" $(find Tests/MacFleetKitTests Tests/MacFleetStateTests -name '*.swift') \
   scripts/swiftc-test-runner/main.swift
-"$OUT/macfleet-tests"
+run_bounded "${TEST_TIMEOUT:-900}" "$OUT/macfleet-tests"
 
 echo "== headless process smoke"
 sh scripts/headless-smoke.sh

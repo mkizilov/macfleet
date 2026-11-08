@@ -1,9 +1,11 @@
 #!/bin/sh
 # Process-level check of the headless agent. It starts the built macfleet-headless binary as its own process, connects a
 # real client over TLS on loopback, refuses a wrong secret, then stops the agent with SIGTERM and checks the clean stop.
+# Every network step and the agent itself run under a time limit, so a hang fails the check instead of blocking it.
 # Everything it writes lives under .agent-local/headless-smoke and is removed when the script exits.
 set -eu
 cd "$(dirname "$0")/.."
+. scripts/lib/bounded.sh
 
 HEADLESS="$PWD/.agent-local/swiftc-build/macfleet-headless"
 WORK="$PWD/.agent-local/headless-smoke"
@@ -54,7 +56,9 @@ chmod 600 "$WORK/client-secret.b64"
 PIN=$("$HEADLESS" identity show --config "$CONFIG")
 echo "fingerprint $PIN"
 
-"$HEADLESS" run --config "$CONFIG" > "$WORK/agent.out" 2> "$WORK/agent.err" &
+# Started under perl's alarm. The pid stays the agent's, and the alarm stops the agent if it hangs.
+/usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' 120 "$HEADLESS" run --config "$CONFIG" \
+  > "$WORK/agent.out" 2> "$WORK/agent.err" &
 AGENT_PID=$!
 
 ready=0
@@ -72,7 +76,7 @@ if [ "$ready" -ne 1 ]; then
 fi
 echo "agent healthy"
 
-"$HEADLESS" fetch --host 127.0.0.1 --port "$PORT" --client smoke-client --pin "$PIN" \
+run_bounded 60 "$HEADLESS" fetch --host 127.0.0.1 --port "$PORT" --client smoke-client --pin "$PIN" \
   --secret-file "$WORK/client-secret.b64" --count 2 > "$WORK/snapshots.jsonl" 2> "$WORK/client.err"
 snapshots=$(grep -c '"capturedAt"' "$WORK/snapshots.jsonl" || true)
 if [ "$snapshots" -ne 2 ]; then
@@ -85,8 +89,14 @@ echo "client received 2 snapshots over TLS"
 WRONG="$WORK/wrong-secret.b64"
 /usr/bin/openssl rand -base64 32 > "$WRONG"
 chmod 600 "$WRONG"
-if "$HEADLESS" fetch --host 127.0.0.1 --port "$PORT" --client smoke-client --pin "$PIN" \
-  --secret-file "$WRONG" --count 1 > "$WORK/wrong.jsonl" 2> "$WORK/wrong.err"; then
+wrong_status=0
+run_bounded 60 "$HEADLESS" fetch --host 127.0.0.1 --port "$PORT" --client smoke-client --pin "$PIN" \
+  --secret-file "$WRONG" --count 1 > "$WORK/wrong.jsonl" 2> "$WORK/wrong.err" || wrong_status=$?
+if [ "$wrong_status" -eq 142 ]; then
+  echo "the wrong-secret check timed out, which is not a refusal" >&2
+  exit 1
+fi
+if [ "$wrong_status" -eq 0 ]; then
   echo "a wrong secret received metrics" >&2
   exit 1
 fi
@@ -100,6 +110,11 @@ kill -TERM "$AGENT_PID"
 stop_status=0
 wait "$AGENT_PID" || stop_status=$?
 AGENT_PID=""
+if [ "$stop_status" -eq 142 ]; then
+  echo "the agent did not stop within its time limit after SIGTERM" >&2
+  cat "$WORK/agent.err" >&2
+  exit 1
+fi
 if [ "$stop_status" -ne 0 ]; then
   echo "the agent exited with status $stop_status on SIGTERM" >&2
   cat "$WORK/agent.err" >&2

@@ -8,6 +8,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . scripts/lib/config.sh
+. scripts/lib/bounded.sh
 
 # shellcheck disable=SC1091
 . Config/performance-budgets.env
@@ -34,11 +35,11 @@ swiftc -module-name history_check -I "$WORK" -L "$WORK" -lMacFleetKit $COMMON -e
   -Xlinker -rpath -Xlinker "$WORK" -o "$WORK/history-check" scripts/swiftc-history-check/main.swift
 
 echo "== running the dashboard benchmark"
-"$WORK/dashboard-benchmark" > "$WORK/dashboard.txt"
+run_bounded 900 "$WORK/dashboard-benchmark" > "$WORK/dashboard.txt"
 cat "$WORK/dashboard.txt"
 
 echo "== running the history and fleet benchmark"
-"$WORK/history-check" benchmark "$WORK/data" > "$WORK/history.txt"
+run_bounded 1800 "$WORK/history-check" benchmark "$WORK/data" > "$WORK/history.txt"
 cat "$WORK/history.txt"
 
 # Pulls the first number after a label in a benchmark line. The labels come from scripts/swiftc-history-check/main.swift.

@@ -5,7 +5,7 @@ import Testing
 
 /// End-to-end sessions over real loopback TLS. Each test takes its own port from 21401 to 21420, and the suite runs one
 /// test at a time, so no two listeners overlap.
-@Suite("Remote protocol over loopback TLS", .serialized, .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
+@Suite("Remote protocol over loopback TLS", .serialized, .timeLimit(.minutes(1)), .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
 struct RemoteLoopbackTests {
     private func withHost<T>(
         port: UInt16,

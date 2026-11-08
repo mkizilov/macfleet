@@ -3,6 +3,7 @@
 # Compiles with swiftc, like scripts/swiftc-verify.sh. Outputs are removed on exit.
 set -eu
 cd "$(dirname "$0")/.."
+. scripts/lib/bounded.sh
 
 SDK="${SDK:-/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk}"
 OUT="$PWD/.agent-local/swiftc-benchmark"
@@ -24,4 +25,4 @@ swiftc -emit-library -emit-module -parse-as-library -module-name MacFleetState -
 swiftc -module-name dashboard_benchmark -I "$OUT" -L "$OUT" -lMacFleetKit -lMacFleetState $COMMON \
   -Xlinker -rpath -Xlinker "$OUT" -o "$OUT/dashboard-benchmark" scripts/swiftc-benchmark/main.swift
 
-"$OUT/dashboard-benchmark"
+run_bounded 900 "$OUT/dashboard-benchmark"

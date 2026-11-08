@@ -7,7 +7,7 @@ import Testing
 /// loops. Only the clock is controlled, so each retry happens when a test fires it. Ports come from 21444 to 21450, and
 /// the suite runs serially.
 @MainActor
-@Suite("Multi-Mac fleet over loopback TLS", .serialized, .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
+@Suite("Multi-Mac fleet over loopback TLS", .serialized, .timeLimit(.minutes(1)), .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
 struct RemoteFleetIntegrationTests {
     private let timings = RemoteTimings(heartbeatInterval: 0.5, idleTimeout: 5, handshakeTimeout: 5)
 

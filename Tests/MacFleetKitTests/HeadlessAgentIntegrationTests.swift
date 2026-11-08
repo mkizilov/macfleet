@@ -4,7 +4,7 @@ import Testing
 
 /// Integration tests: a real headless agent serving real TLS sessions to a real client on loopback. The sampling
 /// provider is the mock, so readings are deterministic. Ports come from 21421 to 21439, and the suite runs serially.
-@Suite("Headless agent integration", .serialized, .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
+@Suite("Headless agent integration", .serialized, .timeLimit(.minutes(1)), .enabled(if: RemoteTestSupport.memoryOnlyImportAvailable))
 struct HeadlessAgentIntegrationTests {
     /// A complete agent setup in a scratch directory: an identity, a client secret, a configuration, and the paths the
     /// agent writes to. Everything is removed when the test ends.
