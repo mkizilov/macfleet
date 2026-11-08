@@ -2,10 +2,11 @@ import AppKit
 import MacFleetKit
 import MacFleetState
 
-/// Owns the model and connects app-level events to the sampling engine: sleep, wake, and termination.
+/// Owns the models and connects app-level events to the sampling engine: sleep, wake, and termination.
 @MainActor
 final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
     let model: FleetStatusModel
+    let processes = ProcessMonitorModel(monitor: ProcessMonitor())
     private var powerObservers: [NSObjectProtocol] = []
 
     override init() {

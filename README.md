@@ -15,16 +15,19 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetKit/Models` | `SystemSnapshot`, `MetricReading` (value or explicit unavailable reason), `MetricIssue`, `MonitoringSelection`, byte and percent formatting |
 | `Sources/MacFleetKit/Metrics` | CPU, memory, storage, and network calculations; Mach, FileManager, and getifaddrs/sysctl sources; metric providers; mocks; the simulated timeline |
 | `Sources/MacFleetKit/Storage` | Bounded in-memory snapshot store |
+| `Sources/MacFleetKit/Processes` | Process listing through libproc, permission-aware readings, CPU windows, and sorting, search, totals, and grouping |
 | `Sources/MacFleetKit/Networking` | Wire format for snapshots (no transport yet) |
 | `Sources/MacFleetState/History` | Bounded metric history for charts (`MetricHistory`) |
 | `Sources/MacFleetState/Presentation` | Presentation models: display values, spoken wording, usage levels, chart data. No SwiftUI |
+| `Sources/MacFleetState/Processes` | `ProcessMonitorModel`: samples processes only while the Processes window is open |
 | `Sources/MacFleetState` | `FleetStatusModel`: sampling loop, selection, history, and the dashboard presentation |
 | `Sources/MacFleetUI/Components` | Reusable views: section card, gauge, sparkline chart, readout row, level badge, colors |
 | `Sources/MacFleetUI/Dashboard` | Section cards and the dashboard content view |
 | `Sources/MacFleetUI` | Popover (`StatusPopoverView`), menu bar label (`MenuBarLabelView`) |
+| `Sources/MacFleetUI/Processes` | The Processes window's view (`ProcessMonitorView`) |
 | `Sources/MacFleetUI/Previews` | Preview providers fed by the simulated timeline |
 | `Sources/MacFleetAgent` | Command-line agent target |
-| `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`) |
+| `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`) and the Processes window |
 | `MacFleet.xcodeproj` | Xcode application project with Debug and Release configurations |
 | `Tests/` | Swift Testing suites for the kit and the state layer |
 | `scripts/swiftc-verify.sh` | Verified build, test, and agent-run pipeline using `swiftc` only |
@@ -322,6 +325,47 @@ The Disks section lists browsable, monitored volumes. The Network section lists 
 
 Neither `getifaddrs`, `sysctl(NET_RT_IFLIST2)`, nor `FileManager` volume properties need special permissions. The permission and disconnect paths are covered by unit tests with injected failures rather than by revoking real permissions.
 
+## Processes
+
+The Processes window opens from **Processes** in the popover. It lists each process macOS shows to this app, with its PID, name, start time, CPU, and memory footprint. It can be sorted by CPU or memory, searched by name, and grouped by app.
+
+- **Public interfaces only.** The listing uses `proc_listpids`, `proc_pidpath`, `proc_pidinfo(PROC_PIDTBSDINFO)`, and `proc_pid_rusage(RUSAGE_INFO_V4)`. It needs no entitlement, no Full Disk Access, and no privileged helper. Nothing terminates a process.
+- **Permission boundary.** macOS refuses `proc_pid_rusage` for processes owned by other users and for protected ones. Those rows keep their PID and name, and show "Not permitted by macOS" where CPU and memory would be. Totals count only readings that exist and say how many processes were not permitted.
+- **CPU percent.** Percent of one core, as Activity Monitor reports it. It is the change in CPU time over the change in awake time (`MonotonicTime`), so sleep does not inflate it. Process CPU time is in mach absolute ticks, converted to nanoseconds with `mach_timebase_info` (125/3 on Apple silicon). A process has no percentage until its second reading. A window shorter than one second keeps the older baseline and repeats the last percentage.
+- **Memory.** The physical footprint (`ri_phys_footprint`), the figure Activity Monitor shows as Memory.
+- **Identity.** A process is identified by PID and start time, so a reused PID starts over with no CPU baseline. A process whose start time is not read is identified by PID alone.
+- **Changing processes.** A process that exits between listing and reading is left out, and its baseline is dropped. A failed listing shows as one reason, never as an empty list.
+- **Sampling.** `ProcessMonitorModel` samples every two seconds only while the window is open. `processesDidDisappear` waits for the loop to stop. Sorting and search rebuild from the last sample and do not sample again.
+- **Deliberately not in `SamplingEngine`.** Process listings are not part of `SystemSnapshot`, history, or the wire format, and they run only while the window is open, so they have their own loop. Each sample is awaited before the next starts, so at most one listing is in flight. The libproc calls are synchronous and cannot be cancelled mid-call, so no deadline races them.
+
+### Measured
+
+Development Mac (arm64, macOS 27.2), optimized build, run as a standard user. 433 processes were listed.
+
+| Measure | Result |
+| --- | --- |
+| Listing, median / slowest of 12 samples | 8.1 ms / 106 ms. The cause of the slowest sample was not checked |
+| Readable / permission-restricted | 268 / 165 |
+| `/usr/bin/yes` child, CPU per sample, 2 s apart | 97.1–100.0% from the second sample on |
+| Presentation build for 433 rows, median / slowest of 50 | 4.2 ms / 14.7 ms, on the main actor, once per sample |
+
+The listing runs on the monitor actor, off the main thread. At this process count the window costs about 4 ms of main-thread work every two seconds.
+
+### Tests
+
+- **Aggregation.** Sorting by CPU and memory, with unmeasured processes last and PID tie-breaks. Search ignores case and surrounding spaces and never matches an unreadable name. Totals count only readings that exist. Groups sum their members.
+- **Monitor.** The first reading has no percentage. Short windows keep the baseline. Counter resets are reported and recover. A process that exits mid-collection is omitted while the others report. A reused PID starts over. Denied processes keep their PID and name and show reasons. A failed listing is one unavailable snapshot.
+- **Live.** This process is listed with its name, a start time in the past, and a footprint. launchd is listed. A busy loop's CPU time matches wall time within 0.5–8×. The bounds are wide because other tests in the same process may add CPU.
+- **Presentation and model.** Reasons appear in place of values. Summary and group wording distinguishes "Waiting for a second sample" from "Not permitted by macOS". Empty and failed listings explain themselves. The model samples only while open, and sorting and search do not sample.
+
+### Limitations
+
+- The Processes window was typechecked, not run. Opening and closing it, the popover button, window activation, and sampling stopping when the window closes were not exercised in a running app.
+- The app target typechecks with the Command Line Tools SDK (`swiftc -typecheck`). It was not built with Xcode.
+- Denied processes were seen on this Mac (165 of 433), but no second user account was available, so the permission boundary was not checked against another user's processes.
+- CPU shows "Waiting for a second sample" on every row for the first two seconds.
+- The CPU check used one busy child process. Other processes were not compared with another tool.
+
 ## Verified commands
 
 Run from the repository root.
@@ -340,7 +384,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 295 Swift Testing tests in 69 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 328 Swift Testing tests in 81 suites passed (33 of them cover processes), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -356,6 +400,7 @@ The test suites cover:
 - Simulated metrics: determinism, physical ranges, growing counters, the deliberate CPU gap, and default exclusions.
 - The monitoring selection, its JSON round trip, and the model: dashboard built on refresh, history capacity, source toggles that rebuild immediately, and the expanded state.
 - The sampling loop, which stops when cancelled.
+- Processes: aggregation, sorting, search, and totals; the monitor's CPU windows, counter resets, exits during collection, PID reuse, and denied and failed listings; a live listing of this process and a busy-loop CPU check; presentation wording; and the model's sampling lifecycle.
 
 ## Responsiveness measurement
 
@@ -418,7 +463,7 @@ The app target needs Xcode because SwiftUI's `@State` macro plugin ships only wi
 
 The menu bar label starts a sampling loop that refreshes every two seconds. Opening the popover or pressing Refresh also samples.
 
-Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, and the Sources toggles. The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
+Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, the Sources toggles, and the Processes window (its opening, layout, and sampling stopping when it closes). The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
 
 ## Run the agent
 

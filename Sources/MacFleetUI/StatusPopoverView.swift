@@ -5,9 +5,11 @@ import SwiftUI
 /// Menu bar popover. Reads presentation values from the model and forwards actions back to it.
 public struct StatusPopoverView: View {
     private let model: FleetStatusModel
+    private let onShowProcesses: () -> Void
 
-    public init(model: FleetStatusModel) {
+    public init(model: FleetStatusModel, onShowProcesses: @escaping () -> Void) {
         self.model = model
+        self.onShowProcesses = onShowProcesses
     }
 
     public var body: some View {
@@ -74,6 +76,8 @@ public struct StatusPopoverView: View {
             }
             .accessibilityHint(model.isShowingDetails ? "Collapses the graphs and details" : "Expands the graphs and details")
             Spacer()
+            Button("Processes", action: onShowProcesses)
+                .accessibilityHint("Opens the process list in its own window")
             Button("Refresh") {
                 Task { await model.refresh() }
             }
