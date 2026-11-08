@@ -32,7 +32,57 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `scripts/swiftc-test-runner/main.swift` | Entry point that runs the Swift Testing suites from the script |
 | `scripts/swiftc-benchmark/main.swift` | Benchmark driver for the script above |
 
-## Dashboard
+## Sampling engine
+
+Sampling is owned by `SamplingEngine` (`Sources/MacFleetKit/Sampling`), an actor that every consumer goes through.
+
+### Rules
+
+- **One collection at a time.** A request made during a collection waits for it and shares its result. Overlapping callers never start a second collection.
+- **A deadline on every collection.** The engine races the provider against a 10 s deadline (`collectionDeadline`). A provider that ignores cancellation cannot hold the loop: the deadline returns a failure and the late result is discarded.
+- **Sections run concurrently with their own deadline.** `ProcessSystemMetricsProvider` runs CPU, memory, pressure, storage, network, and load in parallel. A section that misses its 2 s deadline reports `.timedOut`, and the other sections still arrive. Only a missing load average fails the whole snapshot.
+- **Subscribers get the newest update.** Each subscriber has a stream that keeps one buffered update. A slow consumer never builds a backlog.
+- **The loop runs only while someone is subscribed.** It runs at the fastest interval any subscriber asked for, and it stops when the last subscriber leaves.
+- **Failures back off.** A failed collection doubles the wait, up to 60 s, and the first success resets it.
+
+### Subscriptions
+
+| Caller | Interval | Lifetime |
+| --- | --- | --- |
+| Menu bar label | 10 s (`SamplingInterval.background`) | While the label exists |
+| Popover | 2 s (`SamplingInterval.interactive`) | While the popover is visible |
+
+A subscription lasts as long as its `updates` stream. Releasing the stream, or cancelling the task that consumes it, unsubscribes. Keep the `Subscription` value alive for as long as you want updates.
+
+`SamplingInterval` clamps requested cadences to 0.5 s…3,600 s. Non-finite values fall back to the minimum.
+
+### Sleep, wake, and termination
+
+- **Sleep.** The app observes `NSWorkspace.willSleepNotification` and calls `suspend()`, which cancels the loop. Nothing is scheduled while asleep.
+- **Wake.** `NSWorkspace.didWakeNotification` calls `resume()`. Rate baselines are dropped, so no rate spans the sleep, and sampling restarts at once.
+- **Detection without notifications.** Each collection compares wall-clock time with awake monotonic time. A wall-clock gap more than 2 s longer than the awake gap is treated as a sleep, and baselines are dropped.
+- **Monotonic time.** Rates use `MonotonicTime`, which is `SuspendingClock` (awake time only). A window never counts time spent asleep.
+- **Termination.** `applicationShouldTerminate` calls `shutdown()` and replies only after sampling stops, so no collection is cut off mid-write. Power observers are removed in `applicationWillTerminate`.
+
+### Concurrency tests
+
+The engine tests use `ManualScheduler`, which replaces the cadence sleeps with virtual time. Waits and wake-ups are exact, so the tests assert the precise sequence of wait durations rather than relying on real timing. The collection deadline is the one real timer, and its test uses a 100 ms deadline against a provider that never returns.
+
+### Measured overhead
+
+Measured on the development Mac (arm64, 10 logical CPUs, macOS 27.2) with an optimized build (`-O`). The probe runs the real `ProcessSystemMetricsProvider` through the real `SamplingEngine` for 30 s per run, and reads the process's own CPU time (`getrusage`) and resident memory (`mach_task_basic_info`). Three runs per case:
+
+| Case | Collections per 30 s | CPU seconds per 30 s | Share of one core | Resident memory |
+| --- | --- | --- | --- | --- |
+| 2 s cadence (popover open) | 15–16 | 0.130–0.136 | 0.41–0.45% | 5.9 MB → 10.2–10.4 MB |
+| 10 s cadence (menu bar only) | 3 | 0.042–0.045 | 0.13–0.15% | 5.9 MB → 8.3–9.1 MB |
+| No subscriber (idle) | 0 | 0.000 | 0.001% | 5.9 MB → 5.2 MB |
+
+The idle row is the no-polling check: with no subscriber the engine made no collections in 30 s.
+
+What these numbers cover: the engine and the provider. They do not cover the menu bar label, the popover, or the SwiftUI rendering, which were not measured. Memory is the resident size at the end of each run, not a peak under long-running load. The 2 s rows include the first-collection warm-up.
+
+### Dashboard
 
 ### Menu bar
 
@@ -149,7 +199,7 @@ scripts/swiftc-benchmark.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 156 Swift Testing tests in 35 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 193 Swift Testing tests in 43 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 

@@ -1,21 +1,17 @@
 import MacFleetKit
-import MacFleetState
 import MacFleetUI
 import SwiftUI
 
 @main
 struct MacFleetApp: App {
-    @State private var model = FleetStatusModel(
-        provider: ProcessSystemMetricsProvider(),
-        store: InMemorySnapshotStore()
-    )
+    @NSApplicationDelegateAdaptor(MacFleetAppDelegate.self) private var appDelegate
 
     var body: some Scene {
         MenuBarExtra {
-            StatusPopoverView(model: model)
+            StatusPopoverView(model: appDelegate.model)
         } label: {
-            MenuBarLabelView(presentation: model.dashboard?.menuBar)
-                .task { await model.runSampling(every: .seconds(2)) }
+            MenuBarLabelView(presentation: appDelegate.model.dashboard?.menuBar)
+                .task { await appDelegate.model.runSampling(every: .background) }
         }
         .menuBarExtraStyle(.window)
     }

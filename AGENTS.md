@@ -34,6 +34,7 @@ Extend this file with the project's language-specific architecture and verificat
 - Presentation: build display values (text, spoken wording, usage levels, chart data) in `MacFleetState/Presentation`, once per sample. Views in `MacFleetUI` take presentation values and action closures only. Keep them free of collection logic.
 - UI state: no property wrappers in `MacFleetUI`. The Command Line Tools cannot expand the SwiftUI macro plugin, so hold view state (such as the expanded popover) in the observable model.
 - Charts: keep histories bounded, store unavailable samples as gaps rather than zeros, and mark every chart with a spoken summary.
+- Sampling: all collection goes through `SamplingEngine`. Keep at most one collection in flight. Never wait on a provider without a deadline, and never make a deadline wait on the provider: `withTaskGroup` cannot return while a child is running, so the deadline must race through a gate. A subscription lasts as long as its stream, so tests must keep the `Subscription` alive for as long as they expect updates.
 - Verification reporting: report exactly which commands ran and their results. If Xcode or the Swift toolchain cannot run in the environment, say so and list what was not verified. Never claim a build or test passed without running it.
 
 ## Verification commands

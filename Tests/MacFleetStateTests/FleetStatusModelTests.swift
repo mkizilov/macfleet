@@ -54,7 +54,7 @@ struct FleetStatusSamplingTests {
         let provider = CountingProvider()
         let model = FleetStatusModel(provider: provider, store: InMemorySnapshotStore())
 
-        let task = Task { await model.runSampling(every: .milliseconds(5)) }
+        let task = Task { await model.runSampling(every: SamplingInterval(seconds: 0.5)) }
         try await Task.sleep(for: .milliseconds(60))
         task.cancel()
         await task.value
@@ -150,5 +150,87 @@ struct FleetStatusDashboardTests {
         #expect(model.isShowingDetails == false)
         model.isShowingDetails.toggle()
         #expect(model.isShowingDetails)
+    }
+}
+
+@MainActor
+@Suite("Popover and power lifecycle")
+struct FleetStatusLifecycleTests {
+    private func makeModel() -> FleetStatusModel {
+        FleetStatusModel(provider: MockSystemMetricsProvider(), store: InMemorySnapshotStore())
+    }
+
+    @Test func noSubscriberMeansNoSampling() async {
+        let model = makeModel()
+        #expect(await model.samplingInterval() == nil)
+        #expect(await model.isSampling() == false)
+    }
+
+    @Test func backgroundSamplingRunsAtTheBackgroundCadence() async {
+        let model = makeModel()
+        let background = Task { await model.runSampling(every: .background) }
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(await model.samplingInterval() == SamplingInterval.background)
+        background.cancel()
+        await background.value
+        #expect(await model.samplingInterval() == nil)
+    }
+
+    @Test func popoverSpeedsSamplingUpWhileOpenAndRestoresItOnClose() async {
+        let model = makeModel()
+        let background = Task { await model.runSampling(every: .background) }
+        try? await Task.sleep(for: .milliseconds(30))
+
+        await model.popoverDidAppear()
+        #expect(await model.samplingInterval() == SamplingInterval.interactive)
+
+        await model.popoverDidDisappear()
+        #expect(await model.samplingInterval() == SamplingInterval.background)
+
+        background.cancel()
+        await background.value
+    }
+
+    @Test func openingAndClosingTheSamePopoverTwiceIsHarmless() async {
+        let model = makeModel()
+        await model.popoverDidAppear()
+        await model.popoverDidAppear()
+        #expect(await model.samplingInterval() == SamplingInterval.interactive)
+        await model.popoverDidDisappear()
+        await model.popoverDidDisappear()
+        #expect(await model.samplingInterval() == nil)
+    }
+
+    @Test func sleepStopsSchedulingAndWakeResumesIt() async {
+        let model = makeModel()
+        await model.popoverDidAppear()
+        #expect(await model.isSampling())
+
+        await model.systemWillSleep()
+        #expect(await model.isSampling() == false)
+
+        await model.systemDidWake()
+        #expect(await model.isSampling())
+        await model.shutdown()
+    }
+
+    @Test func shutdownStopsEverything() async {
+        let model = makeModel()
+        await model.popoverDidAppear()
+        await model.shutdown()
+        #expect(await model.isSampling() == false)
+        #expect(await model.samplingInterval() == nil)
+    }
+
+    @Test func historyStaysConsistentAcrossRefreshesAndSubscriptions() async {
+        let model = makeModel()
+        let background = Task { await model.runSampling(every: .background) }
+        try? await Task.sleep(for: .milliseconds(30))
+        await model.refresh()
+        await model.refresh()
+        background.cancel()
+        await background.value
+        #expect(model.history.cpu.samples.count == model.history.download.samples.count)
+        #expect(model.history.cpu.samples.count >= 2)
     }
 }

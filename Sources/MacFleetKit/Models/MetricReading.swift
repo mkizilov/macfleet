@@ -15,6 +15,7 @@ public enum MetricIssue: Error, Codable, Equatable, Sendable {
     case unrecognizedPressureLevel(Int32)
     case inconsistentMemoryAccounting
     case inconsistentStorageCounters
+    case timedOut
 }
 
 extension MetricIssue: LocalizedError {
@@ -48,6 +49,8 @@ extension MetricIssue: LocalizedError {
             "Memory counters are inconsistent"
         case .inconsistentStorageCounters:
             "Volume capacity counters are inconsistent"
+        case .timedOut:
+            "Sampling timed out"
         }
     }
 }

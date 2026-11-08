@@ -41,7 +41,8 @@ public struct StatusPopoverView: View {
         }
         .padding()
         .frame(width: 360)
-        .task { await model.refresh() }
+        .onAppear { Task { await model.popoverDidAppear() } }
+        .onDisappear { Task { await model.popoverDidDisappear() } }
     }
 
     private var header: some View {
