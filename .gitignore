@@ -4,3 +4,7 @@
 .venv/
 _opam/
 .DS_Store
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate

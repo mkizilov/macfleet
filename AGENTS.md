@@ -15,3 +15,27 @@
 - End each turn with a short summary of changes, checks actually run, remaining limitations, and commit hash. The orchestrator will provide the next prompt only after this turn ends.
 
 Extend this file with the project's language-specific architecture and verification commands while retaining these boundaries.
+
+## Swift architecture
+
+- Targets macOS 14+ with Swift 6 language mode and SwiftUI. Use only documented public Apple APIs.
+- `Package.swift` defines the shared libraries: `MacFleetKit` (models, metrics, storage, networking), `MacFleetState` (application state), `MacFleetUI` (SwiftUI views), the `macfleet-agent` command-line target, and the test targets.
+- `MacFleet.xcodeproj` at the repository root hosts the menu bar app (`App/MacFleetApp.swift`) and links the local package. Debug and Release configurations are both defined.
+- Keep modules layered: `MacFleetKit` must not import `MacFleetState` or `MacFleetUI`; UI code must not talk to metric APIs directly.
+
+## Swift engineering rules
+
+- Concurrency: use Swift 6 strict concurrency. Mark UI-facing state `@MainActor`. Use `actor` for shared mutable storage. Make values crossing isolation boundaries `Sendable`. Do not use `@unchecked Sendable` or `nonisolated(unsafe)` without a written justification.
+- Testability: depend on protocols (`SystemMetricsProviding`, `SnapshotStoring`) and inject them. Provide mock implementations for tests and previews. Never call real system APIs from application state.
+- Preservation: when changing behavior, keep existing public APIs and tests passing unless a change is explicitly requested. Add tests for new behavior.
+- Resource cleanup: bound in-memory collections, cancel or await asynchronous work that the UI started, and avoid timers or observers that outlive their owner.
+- Verification reporting: report exactly which commands ran and their results. If Xcode or the Swift toolchain cannot run in the environment, say so and list what was not verified. Never claim a build or test passed without running it.
+
+## Verification commands
+
+Run from the repository root. Use the project-local `.build` directory and the project-local cache paths documented in `README.md`.
+
+- Package tests: `swift test`
+- Agent run: `swift run macfleet-agent`
+- Release package build: `swift build -c release`
+- App build (requires full Xcode): `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build`
