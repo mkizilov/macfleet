@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  User LaunchAgent for the MacFleet headless agent. It runs in the user's login session, so it can read the login
+  keychain and the Tailscale address exists once Tailscale is connected.
+
+  This is a template. Before installing, replace each __PLACEHOLDER__ with an absolute path. docs/headless-agent.md
+  has the checklist. Nothing here is installed by the repository.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.macfleet.headless</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__MACFLEET_HEADLESS_BINARY__</string>
+        <string>run</string>
+        <string>--config</string>
+        <string>__MACFLEET_HEADLESS_CONFIG__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart after a failure, such as a listener whose address is not up yet. A clean stop (exit 0) is not restarted. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- The agent writes its own structured log and status file. These files catch only output the agent could not log. -->
+    <key>StandardOutPath</key>
+    <string>__MACFLEET_LOG_DIRECTORY__/headless.launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__MACFLEET_LOG_DIRECTORY__/headless.launchd.err.log</string>
+</dict>
+</plist>

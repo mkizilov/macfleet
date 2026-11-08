@@ -18,6 +18,9 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetKit/Processes` | Process listing through libproc, permission-aware readings, CPU windows, and sorting, search, totals, and grouping |
 | `Sources/MacFleetKit/Alerts` | Alert metrics, settings and their persistence, notification permission and delivery (`UserNotificationAlertNotifier`), and recording mocks |
 | `Sources/MacFleetKit/Remote` | Remote metrics protocol: versioned JSON messages, framing, TLS with a pinned host identity, HMAC client authentication, the network policy, and host and client sessions |
+| `Sources/MacFleetKit/Agent` | Headless agent core: configuration, secret stores, structured logging, health reports, local address checks, and the agent lifecycle |
+| `Sources/MacFleetHeadless` | The `macfleet-headless` command: `run`, `status`, `addresses`, `identity`, `credential`, and `fetch` |
+| `Support/launchd` | The LaunchAgent template for the headless agent (not installed by the repository) |
 | `docs/remote-protocol.md` | Protocol specification: identity model, authentication, wire format, compatibility rules, and threat model |
 | `Sources/MacFleetKit/Networking` | Wire format for snapshots (no transport yet) |
 | `Sources/MacFleetState/History` | Bounded metric history for charts (`MetricHistory`) |
@@ -413,7 +416,7 @@ Each alert has its own enable switch, threshold, sustained period, and cooldown.
 
 ## Remote monitoring protocol
 
-MacFleet can serve its metric snapshots to an authenticated client over TLS. The protocol is versioned (1.0) and carries JSON messages in length-prefixed frames. It lives in `MacFleetKit` (`Sources/MacFleetKit/Remote`) and has no SwiftUI dependency. No app or agent command starts a host or client yet. The full specification, including the identity model, the authentication design, the compatibility rules, and the threat model, is in [docs/remote-protocol.md](docs/remote-protocol.md).
+MacFleet can serve its metric snapshots to an authenticated client over TLS. The protocol is versioned (1.0) and carries JSON messages in length-prefixed frames. It lives in `MacFleetKit` (`Sources/MacFleetKit/Remote`) and has no SwiftUI dependency. The headless agent (below) runs a host. The full specification, including the identity model, the authentication design, the compatibility rules, and the threat model, is in [docs/remote-protocol.md](docs/remote-protocol.md).
 
 - **Host identity.** The host holds a PKCS#12 bundle with an RSA-2048 certificate. A client pins the SHA-256 fingerprint of that certificate. There is no certificate authority and no trust on first use. The bundle is imported in memory only, which needs macOS 15.
 - **Client authentication.** Each client has a 256-bit secret. Each side proves it holds the secret with HMAC-SHA256 over a transcript that covers the session and the TLS channel binding. The host proves it too, and the client checks that proof before it accepts anything.
@@ -425,9 +428,26 @@ MacFleet can serve its metric snapshots to an authenticated client over TLS. The
 
 - Not verified on a real tailnet. The Tailscale ranges are unit-tested, and loopback is tested end to end.
 - Certificate expiry was not tested, and EC identities did not import in testing. Only RSA identities are supported.
-- Failed authentication attempts are not rate-limited or logged, and there is no revocation list beyond removing a credential.
-- Secrets and identities are held in memory by the caller. Keychain storage is not implemented.
-- No entry point runs a host or client, and no configuration is persisted.
+- Failed authentication attempts are logged by the headless agent, but they are not rate-limited, and there is no revocation list beyond removing a credential.
+- The app does not run a host. The headless agent does, and its secrets are kept in the keychain or an owner-only file (see below).
+
+## Headless agent
+
+`macfleet-headless` is a separate command-line executable for running MacFleet without the menu bar. It samples the Mac at a configured interval, serves the latest sample to authenticated clients over TLS, writes a health report and a JSON-lines log, and stops cleanly on SIGTERM or SIGINT. The full guide is [docs/headless-agent.md](docs/headless-agent.md).
+
+- **No listener by default.** A listener needs an explicit numeric address that is assigned to this Mac, such as the Tailscale address. Wildcards are refused.
+- **Private networks.** Clients must come from loopback or the Tailscale ranges, unless `allowedNetworks` says otherwise.
+- **Secrets.** The identity passphrase and each client secret go to the login keychain or to an owner-only file. The configuration file holds no secrets. The secret commands print nothing except the new client secret, once.
+- **Health and logs.** The status file is rewritten on every change and sample, and `status` applies the freshness rules. The log is owner-only, and it rotates at 5 MB.
+- **Shutdown.** Connected clients receive a `shuttingDown` notice before their sessions close.
+- **Automatic start.** `Support/launchd/com.macfleet.headless.plist` is a template with placeholders. Installing it is a manual step in the guide.
+
+### Limitations
+
+- The launchd template lints, but it was not installed or loaded.
+- The keychain store compiles, but automated tests do not change the keychain, so it was not exercised.
+- Not verified on a real tailnet or from another Mac.
+- Login behaviour, such as whether the listener is ready before Tailscale connects, was not observed.
 
 ## Verified commands
 
@@ -439,7 +459,7 @@ scripts/swiftc-benchmark.sh
 scripts/swiftc-history-check.sh
 ```
 
-`scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, then compiles and runs the Swift Testing suites. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
+`scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, builds `macfleet-headless`, compiles and runs the Swift Testing suites, then runs `scripts/headless-smoke.sh`, which starts the headless agent as its own process and checks it end to end. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
 
 `scripts/swiftc-benchmark.sh` builds the kit and state layers with optimization and runs the dashboard benchmark. Its outputs are removed on exit.
 
@@ -447,7 +467,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 445 Swift Testing tests in 104 suites passed (33 of them cover processes, 47 cover alerts, and 70 cover the remote protocol), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 497 Swift Testing tests in 111 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, and 52 cover the headless agent), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -463,6 +483,7 @@ The test suites cover:
 - Simulated metrics: determinism, physical ranges, growing counters, the deliberate CPU gap, and default exclusions.
 - The monitoring selection, its JSON round trip, and the model: dashboard built on refresh, history capacity, source toggles that rebuild immediately, and the expanded state.
 - The sampling loop, which stops when cancelled.
+- Headless agent: configuration validation, secret store permissions, structured log format and rotation, health rules, local address classification, and in-process integration tests that run a real agent and real TLS clients on loopback ports 21421 to 21432, covering snapshots, the status report, a disabled listener, a wrong secret, a disconnecting client, graceful shutdown with the notice, a failed sample, a listener that cannot bind, a missing secret, a second run, and an untrusted pin.
 - Remote protocol: every message's encoding, the envelope and date format on the wire, compatibility with unknown types, fields, and error codes, framing and the frame limits, version negotiation, the authentication proofs and transcript binding, credential and fingerprint validation, the network policy, identity import and pin acceptance, and loopback TLS sessions. The sessions cover a full handshake, refused credentials, a wrong pin, a refused network, a version mismatch, no metrics before authentication, an idle client, heartbeats, and teardown. The loopback suite is serialized and uses ports 21401–21411. Its identity tests need macOS 15.
 - Alerts: settings values and persistence, the engine's sustained periods, hysteresis, cooldown, sleep and unavailable handling with a simulated clock, the model's permission and posting paths, the status model's path, and the presentation wording (see Alerts).
 - Processes: aggregation, sorting, search, and totals; the monitor's CPU windows, counter resets, exits during collection, PID reuse, and denied and failed listings; a live listing of this process and a busy-loop CPU check; presentation wording; and the model's sampling lifecycle.
@@ -545,7 +566,7 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 - The bundle identifier `dev.macfleet.MacFleet` is a placeholder. Change `PRODUCT_BUNDLE_IDENTIFIER` before signing for distribution.
 - The app is ad-hoc signed for local runs (`CODE_SIGN_IDENTITY = "-"`). No team is configured.
 - The menu bar icon is an SF Symbol (`server.rack`) rather than a custom asset.
-- Snapshots are local to this Mac. The remote protocol is implemented as a library in `MacFleetKit`, but no app or agent entry point uses it yet. `FleetWireFormat` still defines the agent's JSON payload.
+- Snapshots are local to this Mac. The remote protocol is implemented in `MacFleetKit`, and the headless agent serves it. The menu bar app does not serve it. `FleetWireFormat` still defines the `macfleet-agent` JSON payload.
 - Memory now uses the binary formatter everywhere, so a memory total shows as "16 GB". The earlier popover used the system memory style, which can differ slightly.
 - Usage is shown as Elevated from 75% and Critical from 90%, for CPU, memory, and disks alike. Pressure maps warning to elevated and critical to critical.
 - Not included: interface MAC addresses, IPv6 addresses, wireless details, per-volume I/O throughput, and per-process network use.

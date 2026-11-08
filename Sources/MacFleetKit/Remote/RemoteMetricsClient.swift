@@ -178,7 +178,7 @@ public actor RemoteMetricsClient {
                     switch envelope.message {
                     case let .snapshot(snapshot):
                         continuation.yield(.snapshot(snapshot))
-                    case let .error(error) where !error.retryable:
+                    case let .error(error) where error.code == .shuttingDown || !error.retryable:
                         throw RemoteClientError.hostRejected(error)
                     case .error, .heartbeat, .unknown, .capabilities:
                         continue

@@ -41,6 +41,10 @@ swiftc -module-name macfleet_agent -I "$OUT" -L "$OUT" -lMacFleetKit $COMMON \
   -Xlinker -rpath -Xlinker "$OUT" -o "$OUT/macfleet-agent" Sources/MacFleetAgent/main.swift
 "$OUT/macfleet-agent" > /dev/null
 
+echo "== macfleet-headless"
+swiftc -module-name macfleet_headless -I "$OUT" -L "$OUT" -lMacFleetKit $COMMON \
+  -Xlinker -rpath -Xlinker "$OUT" -o "$OUT/macfleet-headless" Sources/MacFleetHeadless/main.swift
+
 echo "== Swift Testing suites"
 swiftc -module-name MacFleetTests -I "$OUT" -L "$OUT" -lMacFleetKit -lMacFleetState $COMMON \
   -F "$FW" -plugin-path "$PLUGINS" \
@@ -48,5 +52,8 @@ swiftc -module-name MacFleetTests -I "$OUT" -L "$OUT" -lMacFleetKit -lMacFleetSt
   -o "$OUT/macfleet-tests" $(find Tests/MacFleetKitTests Tests/MacFleetStateTests -name '*.swift') \
   scripts/swiftc-test-runner/main.swift
 "$OUT/macfleet-tests"
+
+echo "== headless process smoke"
+sh scripts/headless-smoke.sh
 
 echo "swiftc verification passed"

@@ -77,6 +77,14 @@ enum RemoteHostIdentityImport {
     }
 }
 
+/// Reads a host's fingerprint from its identity bundle, so an operator can give it to clients. The identity itself is
+/// discarded.
+public enum RemoteIdentityReader {
+    public static func fingerprint(pkcs12: Data, passphrase: String) throws -> HostFingerprint {
+        try RemoteHostIdentityImport.importIdentity(pkcs12: pkcs12, passphrase: passphrase).fingerprint
+    }
+}
+
 /// The client's check of the host's certificate during the TLS handshake. Trust comes only from the pin.
 enum RemoteTrustPolicy {
     /// Accepts the peer only when its leaf certificate has the pinned fingerprint, and when the certificate itself

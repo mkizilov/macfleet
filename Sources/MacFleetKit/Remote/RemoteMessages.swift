@@ -104,6 +104,8 @@ public enum RemoteErrorCode: String, Codable, Equatable, Sendable {
     case snapshotUnavailable
     case timedOut
     case internalError
+    /// The host is stopping. The client may reconnect later.
+    case shuttingDown
     /// A code from a newer peer. It is reported as-is and never treated as fatal by itself.
     case unrecognized
 

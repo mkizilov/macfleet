@@ -103,6 +103,7 @@ Each handshake step must arrive within 10 seconds. Once streaming, a side that r
 | `unexpectedMessage` | A message arrived at a point where it is not allowed. | no |
 | `frameTooLarge` | A frame exceeded the limit. | no |
 | `snapshotUnavailable` | The host could not take a sample. The session continues. | yes |
+| `shuttingDown` | The host is stopping. The client's session ends with this reason, and the client may reconnect later. | yes |
 | `timedOut` | The peer stopped responding. | no |
 | `internalError` | The host could not finish a step. | no |
 | `unrecognized` | A code from a newer peer. Clients treat it as a non-fatal report. | depends |

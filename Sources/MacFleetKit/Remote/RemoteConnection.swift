@@ -6,6 +6,13 @@ import Network
 /// session actor it is handed to. It is the only place a connection crosses an isolation boundary.
 struct NetworkConnectionHandle: @unchecked Sendable {
     let connection: NWConnection
+    /// The peer's numeric address, when the listener knows it.
+    let remoteAddress: String?
+
+    init(connection: NWConnection, remoteAddress: String? = nil) {
+        self.connection = connection
+        self.remoteAddress = remoteAddress
+    }
 }
 
 public enum RemoteTransportError: Error, Equatable, Sendable {
@@ -117,6 +124,12 @@ actor RemoteConnection {
     /// The TLS exporter for this connection. Nil until TLS has completed.
     func channelBinding() -> Data? {
         RemoteTLS.channelBinding(of: handle.connection)
+    }
+
+    /// The numeric address this connection arrived on, which is the host's own address. Nil until the connection is
+    /// ready.
+    func localAddress() -> String? {
+        handle.connection.currentPath?.localEndpoint.flatMap(RemoteNetworkPolicy.address(of:))
     }
 
     func close() {

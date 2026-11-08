@@ -68,6 +68,23 @@ public struct RemoteNetworkPolicy: Equatable, Sendable {
         return blocks.contains { $0.contains(family: parsed.family, bytes: parsed.bytes) }
     }
 
+    /// Whether the text is one numeric IPv4 or IPv6 address.
+    public static func isAddressLiteral(_ text: String) -> Bool {
+        parse(text) != nil
+    }
+
+    /// Whether the text is the wildcard address, which listens on every interface.
+    public static func isUnspecified(_ text: String) -> Bool {
+        guard let parsed = parse(text) else { return false }
+        return parsed.bytes.allSatisfy { $0 == 0 }
+    }
+
+    /// Whether two texts name the same numeric address, so "::1" and "0:0:0:0:0:0:0:1" match.
+    public static func sameAddress(_ first: String, _ second: String) -> Bool {
+        guard let left = parse(first), let right = parse(second) else { return false }
+        return left.family == right.family && left.bytes == right.bytes
+    }
+
     /// The numeric address of a connection's remote end, or nil when it is a name or unknown.
     static func address(of endpoint: NWEndpoint) -> String? {
         guard case let .hostPort(host, _) = endpoint else { return nil }

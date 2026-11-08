@@ -64,6 +64,7 @@ public enum RemoteConfigurationError: Error, Equatable, Sendable {
     case invalidTimings
     case invalidNetworkBlock(String)
     case invalidPort
+    case invalidListenAddress(String)
 }
 
 /// How often each side speaks and how long it waits. A heartbeat must arrive well inside the idle timeout.
@@ -73,6 +74,10 @@ public struct RemoteTimings: Equatable, Sendable {
     public let handshakeTimeout: Double
 
     public static let standard = RemoteTimings(heartbeatInterval: 5, idleTimeout: 15, handshakeTimeout: 10)
+
+    /// How long a stopping host waits after it tells clients why, before it closes their connections. Closing sooner can
+    /// drop the notice before it is sent.
+    public static let shutdownGrace: Duration = .milliseconds(500)
 
     public init(heartbeatInterval: Double, idleTimeout: Double, handshakeTimeout: Double) {
         precondition(

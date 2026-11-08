@@ -1,38 +1,79 @@
 import Foundation
 import Network
 
+/// What a host reports about its own operation. Logs and health reports are built from these, and none of them carries
+/// a secret.
+public enum RemoteHostEvent: Equatable, Sendable {
+    case listening(port: UInt16)
+    case connectionRejected(reason: ConnectionRejection, remoteAddress: String?)
+    case sessionOpened(session: UUID, remoteAddress: String?)
+    case authenticated(session: UUID, clientID: String)
+    case authenticationFailed(session: UUID, clientID: String?, reason: AuthenticationFailure)
+    case sessionClosed(session: UUID, reason: SessionEnd)
+    case snapshotFailed(session: UUID, message: String)
+}
+
+public enum ConnectionRejection: String, Equatable, Sendable {
+    case outsideNetworkPolicy
+    case atCapacity
+    case wrongLocalAddress
+}
+
+/// Why a handshake failed. The client sees the same refusal for every reason, so only the host's logs distinguish them.
+public enum AuthenticationFailure: String, Equatable, Sendable {
+    case unknownClient
+    case wrongProof
+    case malformedHello
+}
+
+public enum SessionEnd: Equatable, Sendable {
+    case clientClosed
+    case timedOut
+    case refused(RemoteErrorCode)
+    case transportFailed(String)
+    case stopped
+}
+
 /// What a host serves, and who may ask for it.
 public struct RemoteHostConfiguration: Sendable {
     public let displayName: String
     public let port: UInt16
+    /// The one address the host listens on. It defaults to loopback, so a host never listens widely unless told to.
+    public let listenAddress: String
     public let credentials: [RemoteCredential]
     public let networkPolicy: RemoteNetworkPolicy
     public let timings: RemoteTimings
     /// Sessions open at once. A connection beyond this is closed before any byte is exchanged.
     public let maximumSessions: Int
+    public let events: @Sendable (RemoteHostEvent) -> Void
 
     public init(
         displayName: String,
         port: UInt16 = RemoteProtocol.defaultPort,
+        listenAddress: String = "127.0.0.1",
         credentials: [RemoteCredential],
         networkPolicy: RemoteNetworkPolicy = .privateNetworks,
         timings: RemoteTimings = .standard,
-        maximumSessions: Int = 8
+        maximumSessions: Int = 8,
+        events: @escaping @Sendable (RemoteHostEvent) -> Void = { _ in }
     ) {
         let ids = credentials.map(\.clientID)
         precondition(Set(ids).count == ids.count, "each client needs a distinct ID")
         precondition(maximumSessions > 0, "the host must allow at least one session")
         self.displayName = displayName
         self.port = port
+        self.listenAddress = listenAddress
         self.credentials = credentials
         self.networkPolicy = networkPolicy
         self.timings = timings
         self.maximumSessions = maximumSessions
+        self.events = events
     }
 }
 
-/// Serves metric snapshots to authenticated clients over TLS. A connection from outside the network policy is closed
-/// before the handshake, and nothing is sent to a client until its proof verifies.
+/// Serves metric snapshots to authenticated clients over TLS. The listener is bound to one address. A connection from
+/// outside the network policy, or one that reached a different local address, is closed before the handshake, and
+/// nothing is sent to a client until its proof verifies.
 public actor RemoteMetricsHost {
     /// The host's fingerprint. Give it to each client once, so the client can pin it.
     public let fingerprint: HostFingerprint
@@ -41,7 +82,7 @@ public actor RemoteMetricsHost {
     private let identity: SecIdentity
     private let provider: any SystemMetricsProviding
     private var listener: NWListener?
-    private var sessions: [UUID: Task<Void, Never>] = [:]
+    private var sessions: [UUID: (session: RemoteHostSession, task: Task<Void, Never>)] = [:]
 
     /// Loads the identity from a PKCS#12 bundle in memory. The bundle is the host's private key and certificate, so
     /// keep it readable only by the account that runs the host.
@@ -60,6 +101,10 @@ public actor RemoteMetricsHost {
 
     public func start() async throws {
         guard listener == nil else { return }
+        let address = configuration.listenAddress
+        guard RemoteNetworkPolicy.isAddressLiteral(address), !RemoteNetworkPolicy.isUnspecified(address) else {
+            throw RemoteConfigurationError.invalidListenAddress(address)
+        }
         guard let port = NWEndpoint.Port(rawValue: configuration.port) else {
             throw RemoteConfigurationError.invalidPort
         }
@@ -67,18 +112,23 @@ public actor RemoteMetricsHost {
             tls: try RemoteTLS.serverOptions(identity: identity),
             tcp: NWProtocolTCP.Options()
         )
-        let listener = try NWListener(using: parameters, on: port)
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(address), port: port)
+        let listener = try NWListener(using: parameters)
         let policy = configuration.networkPolicy
+        let events = configuration.events
         listener.newConnectionHandler = { [weak self] connection in
-            guard let address = RemoteNetworkPolicy.address(of: connection.endpoint), policy.allows(address: address) else {
+            let remote = RemoteNetworkPolicy.address(of: connection.endpoint)
+            guard let remote, policy.allows(address: remote) else {
+                events(.connectionRejected(reason: .outsideNetworkPolicy, remoteAddress: remote))
                 connection.cancel()
                 return
             }
-            let handle = NetworkConnectionHandle(connection: connection)
+            let handle = NetworkConnectionHandle(connection: connection, remoteAddress: remote)
             Task { await self?.accept(handle) }
         }
         try await waitUntilReady(listener)
         self.listener = listener
+        events(.listening(port: listener.port?.rawValue ?? configuration.port))
     }
 
     /// Sessions open now, including those still in the handshake.
@@ -86,12 +136,23 @@ public actor RemoteMetricsHost {
         sessions.count
     }
 
-    /// Stops listening and closes every session.
-    public func stop() {
+    /// Tells each client the host is shutting down, gives them a moment to read it, then closes every session. Returns
+    /// once each session has finished, so every session's close is recorded before `stop` returns.
+    public func stop() async {
         listener?.cancel()
         listener = nil
-        for session in sessions.values {
-            session.cancel()
+        let live = Array(sessions.values)
+        for entry in live {
+            await entry.session.announceShutdown()
+        }
+        if !live.isEmpty {
+            try? await Task.sleep(for: RemoteTimings.shutdownGrace)
+        }
+        for entry in live {
+            entry.task.cancel()
+        }
+        for entry in live {
+            await entry.task.value
         }
         sessions.removeAll()
     }
@@ -115,21 +176,28 @@ public actor RemoteMetricsHost {
     }
 
     private func accept(_ handle: NetworkConnectionHandle) {
-        guard listener != nil, sessions.count < configuration.maximumSessions else {
+        guard listener != nil else {
+            handle.connection.cancel()
+            return
+        }
+        guard sessions.count < configuration.maximumSessions else {
+            configuration.events(.connectionRejected(reason: .atCapacity, remoteAddress: handle.remoteAddress))
             handle.connection.cancel()
             return
         }
         let id = UUID()
         let session = RemoteHostSession(
+            id: id,
             handle: handle,
             configuration: configuration,
             fingerprint: fingerprint,
             provider: provider
         )
-        sessions[id] = Task {
+        let task = Task {
             await session.run()
             self.sessionEnded(id)
         }
+        sessions[id] = (session, task)
     }
 
     private func sessionEnded(_ id: UUID) {
@@ -144,34 +212,62 @@ actor RemoteHostSession {
         let error: RemoteProtocolError
     }
 
+    private let id: UUID
     private let connection: RemoteConnection
     private let configuration: RemoteHostConfiguration
     private let fingerprint: HostFingerprint
     private let provider: any SystemMetricsProviding
+    private let remoteAddress: String?
     private var version = RemoteProtocol.current
     private var interval = SamplingInterval.interactive
 
     init(
+        id: UUID,
         handle: NetworkConnectionHandle,
         configuration: RemoteHostConfiguration,
         fingerprint: HostFingerprint,
         provider: any SystemMetricsProviding
     ) {
+        self.id = id
         connection = RemoteConnection(handle)
         self.configuration = configuration
         self.fingerprint = fingerprint
         self.provider = provider
+        remoteAddress = handle.remoteAddress
     }
 
     func run() async {
+        configuration.events(.sessionOpened(session: id, remoteAddress: remoteAddress))
+        var end = SessionEnd.clientClosed
         do {
             try await connection.start(within: configuration.timings.handshakeTimeout)
+            try await verifyLocalAddress()
             try await handshake()
             try await streamUntilEitherSideFails()
         } catch {
-            await report(error)
+            end = await report(error)
         }
         await connection.close()
+        configuration.events(.sessionClosed(session: id, reason: end))
+    }
+
+    /// Tells the client the host is stopping. The client may already be gone, so failing to deliver this is expected.
+    func announceShutdown() async {
+        try? await send(.error(RemoteProtocolError(
+            code: .shuttingDown,
+            message: "The host is shutting down.",
+            retryable: true
+        )))
+    }
+
+    /// The listener is bound to one address. A connection that arrived on any other local address is closed.
+    private func verifyLocalAddress() async throws {
+        guard let local = await connection.localAddress(),
+              RemoteNetworkPolicy.sameAddress(local, configuration.listenAddress)
+        else {
+            configuration.events(.connectionRejected(reason: .wrongLocalAddress, remoteAddress: remoteAddress))
+            throw RemoteTransportError.connectionFailed("the connection arrived on an unexpected local address")
+        }
     }
 
     /// Hello, negotiation, the host identity, the client's proof, the host's proof, capabilities, then subscribe.
@@ -182,6 +278,7 @@ actor RemoteHostSession {
             throw refusal(.unexpectedMessage, "The first message must be hello.")
         }
         guard RemoteCredential.isValidClientID(clientHello.clientID) else {
+            configuration.events(.authenticationFailed(session: id, clientID: nil, reason: .malformedHello))
             throw refusal(.malformedMessage, "The client ID is not valid.")
         }
         guard let selected = RemoteNegotiation.select(
@@ -216,11 +313,15 @@ actor RemoteHostSession {
             hostFingerprint: fingerprint,
             channelBinding: binding
         )
-        guard let credential = configuration.credentials.first(where: { $0.clientID == clientHello.clientID }),
-              RemoteAuthenticator.isValid(clientProof.proof, for: .client, credential: credential, transcript: transcript)
-        else {
+        guard let credential = configuration.credentials.first(where: { $0.clientID == clientHello.clientID }) else {
+            configuration.events(.authenticationFailed(session: id, clientID: clientHello.clientID, reason: .unknownClient))
             throw refusal(.authenticationFailed, "The client could not be authenticated.")
         }
+        guard RemoteAuthenticator.isValid(clientProof.proof, for: .client, credential: credential, transcript: transcript) else {
+            configuration.events(.authenticationFailed(session: id, clientID: clientHello.clientID, reason: .wrongProof))
+            throw refusal(.authenticationFailed, "The client could not be authenticated.")
+        }
+        configuration.events(.authenticated(session: id, clientID: clientHello.clientID))
         try await send(.authenticated(HostProof(
             proof: RemoteAuthenticator.proof(for: .host, credential: credential, transcript: transcript)
         )))
@@ -297,6 +398,7 @@ actor RemoteHostSession {
         do {
             message = .snapshot(try await sampleSnapshot())
         } catch {
+            configuration.events(.snapshotFailed(session: id, message: error.localizedDescription))
             message = .error(RemoteProtocolError(
                 code: .snapshotUnavailable,
                 message: error.localizedDescription,
@@ -318,24 +420,36 @@ actor RemoteHostSession {
         Refusal(error: RemoteProtocolError(code: code, message: message, retryable: false))
     }
 
-    /// Tells the client why the session ends, when there is still a connection to tell. The client may already be gone,
-    /// so a failure to deliver this last message is expected and is not an error for the session.
-    private func report(_ error: Error) async {
-        let final: RemoteProtocolError
+    /// Tells the client why the session ends, when there is still a connection to tell, and names the end for the
+    /// host's log. A stopped session was cancelled by the host, so it sends nothing more.
+    private func report(_ error: Error) async -> SessionEnd {
+        if Task.isCancelled {
+            return .stopped
+        }
         switch error {
         case let refusal as Refusal:
-            final = refusal.error
+            try? await send(.error(refusal.error))
+            return .refused(refusal.error.code)
         case let violation as RemoteProtocolViolation:
-            final = RemoteProtocolError(
+            try? await send(.error(RemoteProtocolError(
                 code: .malformedMessage,
                 message: String(describing: violation),
                 retryable: false
-            )
+            )))
+            return .refused(.malformedMessage)
         case RemoteTransportError.timedOut:
-            final = RemoteProtocolError(code: .timedOut, message: "The client stopped responding.", retryable: false)
+            try? await send(.error(RemoteProtocolError(
+                code: .timedOut,
+                message: "The client stopped responding.",
+                retryable: false
+            )))
+            return .timedOut
+        case RemoteTransportError.closed:
+            return .clientClosed
+        case let RemoteTransportError.connectionFailed(description):
+            return .transportFailed(description)
         default:
-            return
+            return .transportFailed(String(describing: error))
         }
-        try? await send(.error(final))
     }
 }
