@@ -78,7 +78,9 @@ struct CPUUtilizationTracker: Sendable {
     }
 
     /// Readings closer than `minimumWindow` repeat the last result and leave the baseline in place,
-    /// so a short window never produces a percentage from only a few ticks.
+    /// so a short window never produces a percentage from only a few ticks. The kernel publishes CPU
+    /// ticks in batches about once a second, so a window can see none; that reading reports
+    /// `.noElapsedTicks` and keeps the baseline, letting the next reading span the full interval.
     mutating func record(
         at timestamp: TimeInterval,
         total: MetricReading<CPUTicks>,
@@ -96,8 +98,12 @@ struct CPUUtilizationTracker: Sendable {
             return lastReading
         }
         guard timestamp - previous.timestamp >= minimumWindow else { return lastReading }
+        let reading = Self.reading(from: previous, total: current, perCore: perCore)
+        if case .unavailable(.noElapsedTicks) = reading {
+            return reading
+        }
         baseline = Baseline(timestamp: timestamp, total: current, perCore: perCore)
-        lastReading = Self.reading(from: previous, total: current, perCore: perCore)
+        lastReading = reading
         return lastReading
     }
 

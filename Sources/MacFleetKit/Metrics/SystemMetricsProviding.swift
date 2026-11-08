@@ -1,7 +1,13 @@
 import Foundation
 
 public protocol SystemMetricsProviding: Sendable {
-    func snapshot() async throws -> SystemSnapshot
+    func snapshot(selection: MonitoringSelection) async throws -> SystemSnapshot
+}
+
+extension SystemMetricsProviding {
+    public func snapshot() async throws -> SystemSnapshot {
+        try await snapshot(selection: .default)
+    }
 }
 
 public enum MetricsError: Error, Equatable {

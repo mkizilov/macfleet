@@ -2,12 +2,19 @@ import Foundation
 
 public enum MetricIssue: Error, Codable, Equatable, Sendable {
     case notSampled
+    case notMonitored
     case counterReset
     case noElapsedTicks
+    case noElapsedTime
     case coreCountChanged(previous: Int, current: Int)
     case kernelCallFailed(call: String, code: Int32)
+    case readFailed(resource: String, code: Int)
+    case permissionDenied(resource: String)
+    case notProvided(resource: String)
+    case volumeDisconnected
     case unrecognizedPressureLevel(Int32)
     case inconsistentMemoryAccounting
+    case inconsistentStorageCounters
 }
 
 extension MetricIssue: LocalizedError {
@@ -15,18 +22,32 @@ extension MetricIssue: LocalizedError {
         switch self {
         case .notSampled:
             "Waiting for a second sample"
+        case .notMonitored:
+            "Not monitored"
         case .counterReset:
-            "CPU counters moved backwards; waiting for the next sample"
+            "Counters moved backwards; waiting for the next sample"
         case .noElapsedTicks:
             "No CPU time elapsed since the last sample"
+        case .noElapsedTime:
+            "No time elapsed since the last sample"
         case let .coreCountChanged(previous, current):
             "Core count changed from \(previous) to \(current)"
         case let .kernelCallFailed(call, code):
             "\(call) failed with code \(code)"
+        case let .readFailed(resource, code):
+            "\(resource) could not be read (code \(code))"
+        case let .permissionDenied(resource):
+            "Permission denied for \(resource)"
+        case let .notProvided(resource):
+            "\(resource) is not provided by this system"
+        case .volumeDisconnected:
+            "Volume is no longer mounted"
         case let .unrecognizedPressureLevel(level):
             "Unrecognized memory pressure level \(level)"
         case .inconsistentMemoryAccounting:
             "Memory counters are inconsistent"
+        case .inconsistentStorageCounters:
+            "Volume capacity counters are inconsistent"
         }
     }
 }

@@ -19,31 +19,18 @@ public struct MockHostCounters: HostCounterSource {
     }
 
     public mutating func cpuTotalTicks() throws(MetricIssue) -> CPUTicks {
-        try Self.next(&cpuTotal)
+        try ScriptedReadings.next(&cpuTotal)
     }
 
     public mutating func perCoreCPUTicks() throws(MetricIssue) -> [CPUTicks] {
-        try Self.next(&perCoreCPU)
+        try ScriptedReadings.next(&perCoreCPU)
     }
 
     public mutating func virtualMemoryCounters() throws(MetricIssue) -> VMCounters {
-        try Self.next(&vmCounters)
+        try ScriptedReadings.next(&vmCounters)
     }
 
     public mutating func memoryPressureLevelValue() throws(MetricIssue) -> Int32 {
-        try Self.next(&pressureLevel)
-    }
-
-    private static func next<T>(_ script: inout [Result<T, MetricIssue>]) throws(MetricIssue) -> T {
-        guard let entry = script.first else {
-            throw .kernelCallFailed(call: "MockHostCounters: no scripted reading", code: 0)
-        }
-        if script.count > 1 { script.removeFirst() }
-        switch entry {
-        case let .success(value):
-            return value
-        case let .failure(issue):
-            throw issue
-        }
+        try ScriptedReadings.next(&pressureLevel)
     }
 }

@@ -23,6 +23,8 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
     public let cpu: MetricReading<CPUUtilization>
     public let memory: MetricReading<MemoryUsage>
     public let memoryPressure: MetricReading<MemoryPressureLevel>
+    public let volumes: MetricReading<[VolumeMetrics]>
+    public let network: MetricReading<[NetworkInterfaceMetrics]>
 
     public init(
         capturedAt: Date,
@@ -34,7 +36,9 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
         loadAverage: LoadAverage,
         cpu: MetricReading<CPUUtilization> = .unavailable(.notSampled),
         memory: MetricReading<MemoryUsage> = .unavailable(.notSampled),
-        memoryPressure: MetricReading<MemoryPressureLevel> = .unavailable(.notSampled)
+        memoryPressure: MetricReading<MemoryPressureLevel> = .unavailable(.notSampled),
+        volumes: MetricReading<[VolumeMetrics]> = .unavailable(.notSampled),
+        network: MetricReading<[NetworkInterfaceMetrics]> = .unavailable(.notSampled)
     ) {
         self.capturedAt = capturedAt
         self.hostName = hostName
@@ -46,5 +50,7 @@ public struct SystemSnapshot: Codable, Equatable, Sendable {
         self.cpu = cpu
         self.memory = memory
         self.memoryPressure = memoryPressure
+        self.volumes = volumes
+        self.network = network
     }
 }

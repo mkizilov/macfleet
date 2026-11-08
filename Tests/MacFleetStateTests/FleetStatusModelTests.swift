@@ -37,9 +37,11 @@ struct FleetStatusModelTests {
 
 private actor CountingProvider: SystemMetricsProviding {
     private(set) var calls = 0
+    private(set) var selections: [MonitoringSelection] = []
 
-    func snapshot() async throws -> SystemSnapshot {
+    func snapshot(selection: MonitoringSelection) async throws -> SystemSnapshot {
         calls += 1
+        selections.append(selection)
         return MockSystemMetricsProvider.sampleSnapshot
     }
 }
@@ -61,5 +63,42 @@ struct FleetStatusSamplingTests {
         #expect(model.snapshot == MockSystemMetricsProvider.sampleSnapshot)
         try await Task.sleep(for: .milliseconds(30))
         #expect(await provider.calls == calls)
+    }
+}
+
+@MainActor
+@Suite("Monitoring selection in the model")
+struct FleetStatusSelectionTests {
+    @Test func defaultSelectionExcludesLoopback() {
+        let model = FleetStatusModel(provider: MockSystemMetricsProvider(), store: InMemorySnapshotStore())
+        #expect(model.selection == .default)
+        #expect(!model.selection.monitorsInterface(named: "lo0"))
+        #expect(model.selection.monitorsInterface(named: "en0"))
+    }
+
+    @Test func togglingAnInterfaceUpdatesSelectionAndRefreshesWithIt() async {
+        let provider = CountingProvider()
+        let model = FleetStatusModel(provider: provider, store: InMemorySnapshotStore())
+
+        await model.setInterfaceMonitored("en0", false)
+        #expect(!model.selection.monitorsInterface(named: "en0"))
+        let excluded = await provider.selections.last
+        #expect(excluded?.excludedInterfaceNames.contains("en0") == true)
+
+        await model.setInterfaceMonitored("en0", true)
+        #expect(model.selection.monitorsInterface(named: "en0"))
+        let restored = await provider.selections.last
+        #expect(restored?.excludedInterfaceNames.contains("en0") == false)
+    }
+
+    @Test func togglingAVolumeRefreshesWithTheVolumeExcluded() async {
+        let provider = CountingProvider()
+        let model = FleetStatusModel(provider: provider, store: InMemorySnapshotStore())
+
+        await model.setVolumeMonitored("/Volumes/USB", false)
+
+        #expect(!model.selection.monitorsVolume(at: "/Volumes/USB"))
+        let latest = await provider.selections.last
+        #expect(latest?.excludedVolumePaths == ["/Volumes/USB"])
     }
 }

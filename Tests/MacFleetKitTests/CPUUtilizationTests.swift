@@ -166,6 +166,21 @@ struct CPUUtilizationTrackerTests {
         #expect(abs(value.total - 0.5) < 1e-12)
     }
 
+    @Test func emptyWindowKeepsBaselineSoNextReadingSpansTheFullInterval() throws {
+        var tracker = CPUUtilizationTracker(minimumWindow: 1)
+        let start = ticks(user: 100, idle: 100)
+        let end = ticks(user: 160, idle: 140)
+
+        _ = tracker.record(at: 0, total: .available(start), perCore: .available([start]))
+        let empty = tracker.record(at: 1.2, total: .available(start), perCore: .available([start]))
+        #expect(empty == .unavailable(.noElapsedTicks))
+
+        let reading = tracker.record(at: 2.4, total: .available(end), perCore: .available([end]))
+        let expected = try CPUUtilizationCalculator.utilization(previous: start, current: end)
+        let value = try #require(reading.availableValue)
+        #expect(abs(value.total - expected) < 1e-12)
+    }
+
     @Test func perCoreFailureKeepsTheTotal() throws {
         var tracker = CPUUtilizationTracker(minimumWindow: 0)
         _ = tracker.record(at: 0, total: .available(idleTicks), perCore: .available([idleTicks]))

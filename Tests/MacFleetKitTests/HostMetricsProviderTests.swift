@@ -116,10 +116,13 @@ struct LiveHostMetricsTests {
     @Test func liveCPUUtilizationIsBoundedAndCoversEveryCore() async throws {
         let provider = ProcessSystemMetricsProvider(minimumCPUWindow: 0.2)
         _ = try await provider.snapshot()
-        try await Task.sleep(for: .milliseconds(300))
-        let snapshot = try await provider.snapshot()
-
-        let cpu = try #require(snapshot.cpu.availableValue)
+        var reading = MetricReading<CPUUtilization>.unavailable(.notSampled)
+        // The kernel publishes CPU ticks in batches about once a second, so a short window can be empty.
+        for _ in 0..<10 where reading.availableValue == nil {
+            try await Task.sleep(for: .milliseconds(300))
+            reading = try await provider.snapshot().cpu
+        }
+        let cpu = try #require(reading.availableValue, "\(reading)")
         #expect((0...1).contains(cpu.total))
         let cores = try #require(cpu.perCore.availableValue)
         #expect(cores.count == ProcessInfo.processInfo.activeProcessorCount)
