@@ -41,3 +41,24 @@ struct ByteFormattingTests {
         #expect(ByteFormatting.percent(1) == "100%")
     }
 }
+
+@Suite("Binary and compact byte formatting")
+struct BinaryAndCompactFormattingTests {
+    @Test func binaryUnitsUsepowersOfTwo() {
+        #expect(ByteFormatting.binary(bytes: UInt64(1_024)) == "1.0 KB")
+        #expect(ByteFormatting.binary(bytes: UInt64(8_589_934_592)) == "8.0 GB")
+        #expect(ByteFormatting.binary(bytes: UInt64(17_179_869_184)) == "16 GB")
+    }
+
+    @Test func binaryRoundsUpToTheNextUnit() {
+        #expect(ByteFormatting.binary(bytes: UInt64(1_048_524)) == "1.0 MB")
+    }
+
+    @Test func compactFormsAreShort() {
+        #expect(ByteFormatting.compact(bytesPerSecond: 0) == "0B")
+        #expect(ByteFormatting.compact(bytesPerSecond: 512) == "512B")
+        #expect(ByteFormatting.compact(bytesPerSecond: 40_000) == "40K")
+        #expect(ByteFormatting.compact(bytesPerSecond: 1_234_000) == "1.2M")
+        #expect(ByteFormatting.compact(bytesPerSecond: 999_600) == "1.0M")
+    }
+}

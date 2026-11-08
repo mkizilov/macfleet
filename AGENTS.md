@@ -31,6 +31,9 @@ Extend this file with the project's language-specific architecture and verificat
 - Resource cleanup: bound in-memory collections, cancel or await asynchronous work that the UI started, and avoid timers or observers that outlive their owner.
 - Unavailable data: model it explicitly with `MetricReading` and a `MetricIssue`. Never report 0 for a value that could not be read, and keep failures independent across metrics.
 - Counters: derive rates from deltas between samples. Use wrapping arithmetic for 32-bit kernel counters and treat backwards jumps as resets. Kernel CPU ticks arrive in roughly one-second batches, so a short window can be empty; keep the baseline in that case instead of advancing it.
+- Presentation: build display values (text, spoken wording, usage levels, chart data) in `MacFleetState/Presentation`, once per sample. Views in `MacFleetUI` take presentation values and action closures only. Keep them free of collection logic.
+- UI state: no property wrappers in `MacFleetUI`. The Command Line Tools cannot expand the SwiftUI macro plugin, so hold view state (such as the expanded popover) in the observable model.
+- Charts: keep histories bounded, store unavailable samples as gaps rather than zeros, and mark every chart with a spoken summary.
 - Verification reporting: report exactly which commands ran and their results. If Xcode or the Swift toolchain cannot run in the environment, say so and list what was not verified. Never claim a build or test passed without running it.
 
 ## Verification commands
@@ -38,5 +41,6 @@ Extend this file with the project's language-specific architecture and verificat
 Run from the repository root.
 
 - Verified in the restricted sandbox: `scripts/swiftc-verify.sh` (manifest, modules, UI typecheck, agent run, Swift Testing suites).
+- Dashboard work per sample, optimized build: `scripts/swiftc-benchmark.sh`.
 - Expected on full Xcode, not verified here: `swift test`, `swift run macfleet-agent`, `xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build`.
 - SwiftPM's build service fails here with EPERM on atomic writes. Do not treat that as a source error. See `README.md`.

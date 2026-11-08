@@ -1,6 +1,6 @@
 # MacFleet
 
-MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. Its popover shows live CPU, memory, memory pressure, disk, network, and uptime figures for the local Mac. A separate command-line agent prints the same snapshot as JSON.
+MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. Its menu bar item shows CPU, memory, and network rates at a glance. The popover shows an overview, and a details view adds graphs, per-core load, storage, network, and the system summary. A separate command-line agent prints the same snapshot as JSON.
 
 ## Requirements
 
@@ -13,17 +13,70 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | --- | --- |
 | `Package.swift` | Shared Swift package: `MacFleetKit`, `MacFleetState`, `MacFleetUI`, `macfleet-agent`, and tests |
 | `Sources/MacFleetKit/Models` | `SystemSnapshot`, `MetricReading` (value or explicit unavailable reason), `MetricIssue`, `MonitoringSelection`, byte and percent formatting |
-| `Sources/MacFleetKit/Metrics` | CPU, memory, storage, and network calculations; Mach, FileManager, and getifaddrs/sysctl sources; metric providers; mocks |
+| `Sources/MacFleetKit/Metrics` | CPU, memory, storage, and network calculations; Mach, FileManager, and getifaddrs/sysctl sources; metric providers; mocks; the simulated timeline |
 | `Sources/MacFleetKit/Storage` | Bounded in-memory snapshot store |
 | `Sources/MacFleetKit/Networking` | Wire format for snapshots (no transport yet) |
-| `Sources/MacFleetState` | Application state (`FleetStatusModel`), the sampling loop, and monitoring selection |
-| `Sources/MacFleetUI` | SwiftUI popover view |
+| `Sources/MacFleetState/History` | Bounded metric history for charts (`MetricHistory`) |
+| `Sources/MacFleetState/Presentation` | Presentation models: display values, spoken wording, usage levels, chart data. No SwiftUI |
+| `Sources/MacFleetState` | `FleetStatusModel`: sampling loop, selection, history, and the dashboard presentation |
+| `Sources/MacFleetUI/Components` | Reusable views: section card, gauge, sparkline chart, readout row, level badge, colors |
+| `Sources/MacFleetUI/Dashboard` | Section cards and the dashboard content view |
+| `Sources/MacFleetUI` | Popover (`StatusPopoverView`), menu bar label (`MenuBarLabelView`) |
+| `Sources/MacFleetUI/Previews` | Preview providers fed by the simulated timeline |
 | `Sources/MacFleetAgent` | Command-line agent target |
 | `App/MacFleetApp.swift` | Menu bar app entry point (`MenuBarExtra`) |
 | `MacFleet.xcodeproj` | Xcode application project with Debug and Release configurations |
 | `Tests/` | Swift Testing suites for the kit and the state layer |
 | `scripts/swiftc-verify.sh` | Verified build, test, and agent-run pipeline using `swiftc` only |
+| `scripts/swiftc-benchmark.sh` | Optimized measurement of the per-sample dashboard work |
 | `scripts/swiftc-test-runner/main.swift` | Entry point that runs the Swift Testing suites from the script |
+| `scripts/swiftc-benchmark/main.swift` | Benchmark driver for the script above |
+
+## Dashboard
+
+### Menu bar
+
+The menu bar item shows CPU and memory percentages and the aggregate network rate, for example `12% · 50% ↓1.5M ↑40K`. Missing values show a dash rather than zero. Its accessibility label speaks the full values, for example "MacFleet. CPU 12 percent. Memory 50 percent. Download 1.5 megabytes per second, upload 40 kilobytes per second."
+
+### Popover
+
+- **Overview** (always shown): gauges for CPU, memory, and the first monitored disk, plus download and upload rates.
+- **Show details**: expands to add these sections, in order:
+  - **CPU**: total gauge, a history graph, and a grid of per-core gauges.
+  - **Memory**: in-use gauge, used, available and total, the pressure level, and a history graph.
+  - **Disks**: each browsable, monitored volume with a gauge, free space, and a removable badge.
+  - **Network**: download and upload rates, a dual-line history graph, and each active interface with its address and totals.
+  - **System**: host, version, processors, uptime, load averages, and the update time.
+  - **Monitored sources**: toggles for every volume and interface, including those hidden from the summary.
+- **Refresh** and **Quit** are unchanged. Expanded state is held by the model (`isShowingDetails`), so it survives the popover being redrawn.
+
+### Charts
+
+Charts are `Canvas` sparklines over a fixed history: 120 samples, about four minutes at the two-second sample interval. A missing sample is drawn as a break in the line, never as a drop to zero. Each chart has a text summary for VoiceOver, with the latest and peak values.
+
+### Light and dark mode
+
+Colors are system colors (`.green`, `.orange`, `.red`, `.blue`, `.purple`) and hierarchical fills, which adapt to the appearance. Severity is never shown by color alone: each level pairs its color with a text label and a symbol (checkmark, triangle, or octagon). Previews cover light, dark, overview, and menu bar.
+
+### Accessibility and formatting
+
+- Every gauge, chart, core cell, and interface row has a label and a spoken value. Rows that combine several values read as one element.
+- Visible text is short ("12%", "1.5 MB/s"). The spoken wording spells out units ("1.5 megabytes per second").
+- Disk and network use decimal units (KB = 1,000 bytes), like Finder. Memory uses binary units (GB = 1,024 MB), like macOS memory displays.
+- Text uses semantic fonts, so Dynamic Type applies. Layout is not tied to fixed text sizes.
+
+### Keeping charts responsive
+
+- Each sample does a fixed amount of work: one history append per series and one presentation build. Views read only presentation values and never compute during a body evaluation.
+- Histories are bounded at 120 samples per series.
+- Charts redraw only when their presentation value changes. Sampling runs every two seconds, so redraws happen at most at that rate.
+- The model rebuilds the presentation once per sample and once per source toggle, so a toggle responds immediately.
+
+Measured numbers are in "Responsiveness measurement" below. Rendering time was not measured, because no window or display was driven.
+
+### Previews without monitoring
+
+`SimulatedMetricsTimeline` generates deterministic, realistic metrics: CPU bursts, a slow memory drift, network bursts with cumulative counters, a removable volume, a VPN interface, and an occasional unavailable CPU reading that exercises the gap rendering. `SimulatedSystemMetricsProvider` serves it through the normal provider protocol, and `DashboardPreviewData` builds presentations from it synchronously. No previews touch the system.
 
 ## Metrics
 
@@ -49,20 +102,20 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 - **Kernel CPU ticks arrive in batches about once a second.** Measured on the development Mac with a 10 ms probe over 12 seconds: small updates arrived every 10–16 ms, and about every second a batch of roughly 900–1,000 ticks landed (about one second of ten cores). A window can therefore see no new ticks. That reading reports "No CPU time elapsed since the last sample" and keeps the previous baseline, so the next reading spans the full interval. The ratio within a batch is still correct.
 - **Short windows repeat the last result.** CPU needs a window of at least one second, and network rates need the same. A reading requested sooner repeats the last accepted value instead of computing a noisy percentage from a few ticks.
 - **Every metric is a `MetricReading`.** When a read fails, the UI shows the reason rather than 0. Failures are isolated: a failed memory read does not hide CPU, and a failed per-core read keeps the total.
-- **Disk and network units are decimal (KB = 1,000 bytes), like Finder.** Memory keeps its earlier binary display, so the popover can show memory in one unit and disks in another.
 - **Available disk space uses "important usage".** It includes purgeable space, as Finder does. `df` leaves purgeable space out, so its figure is lower.
+- **Aggregate network rate is all-or-nothing.** The popover and menu bar sum the rates of every monitored interface, but only when each one has a rate. A partial sum would understate the total, so it is shown as unavailable instead.
 
 ### Monitoring selection
 
 Discovery always lists every mounted volume and network interface. `MonitoringSelection` decides which ones are measured:
 
 - Loopback (`lo0`) is excluded by default, because its traffic never crosses a network link.
-- Individual volumes and interfaces can be turned off and on from the "Monitored sources" disclosure in the popover. Changing a toggle refreshes immediately.
+- Individual volumes and interfaces can be turned off and on from "Monitored sources". Changing a toggle refreshes immediately.
 - An excluded item stays in the snapshot with `.notMonitored` and no capacity or rate. Turning it back on starts its baseline over, so its first rate reads "Waiting for a second sample".
 - The selection lives in `FleetStatusModel` for the session. It is not saved between launches.
 - The `snapshot()` convenience uses `MonitoringSelection.default`. Use `snapshot(selection: .all)` to measure everything, including loopback.
 
-The popover's Disks section lists browsable monitored volumes. The Network section lists monitored interfaces that have an IPv4 address or have carried traffic, so idle virtual interfaces stay out of the summary. Hidden items remain in the sources list.
+The Disks section lists browsable, monitored volumes. The Network section lists monitored interfaces that have an IPv4 address or have carried traffic, so idle virtual interfaces stay out of the summary. Hidden items remain in "Monitored sources".
 
 ### Handling failures
 
@@ -72,11 +125,12 @@ The popover's Disks section lists browsable monitored volumes. The Network secti
 | A volume refuses resource reads | Still listed, with `permissionDenied` or `readFailed` on its capacity |
 | A volume reports inconsistent capacity | `inconsistentStorageCounters`. Available above total, or zero total |
 | Mounted volume list unavailable | Volumes reported as `notProvided`. CPU, memory, and network are unaffected |
-| An interface is disconnected | Still listed, marked "(down)" in the popover, with a zero rate |
+| An interface is disconnected | Still listed, marked "(down)", with a zero rate |
 | An interface is removed | Dropped from the listing and its baseline discarded |
 | An interface has no byte counters | Listed with `notProvided` on its totals and rates |
 | Counters move backwards | `counterReset` for that interval; the next interval recovers |
 | Interface list unavailable | Network reported with the `getifaddrs` or `sysctl` failure |
+| Memory total unknown | Memory usage reported as unavailable, not as a percentage |
 
 Neither `getifaddrs`, `sysctl(NET_RT_IFLIST2)`, nor `FileManager` volume properties need special permissions. The permission and disconnect paths are covered by unit tests with injected failures rather than by revoking real permissions.
 
@@ -86,24 +140,44 @@ Run from the repository root.
 
 ```sh
 scripts/swiftc-verify.sh
+scripts/swiftc-benchmark.sh
 ```
 
-This script typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI`, builds and runs `macfleet-agent`, then compiles and runs the Swift Testing suites. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
+`scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, then compiles and runs the Swift Testing suites. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
+
+`scripts/swiftc-benchmark.sh` builds the kit and state layers with optimization and runs the dashboard benchmark. Its outputs are removed on exit.
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, UI typecheck, and the agent passed with no compiler warnings. All 97 Swift Testing tests in 22 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The full pipeline passed three consecutive runs after one flaky live-CPU failure was traced to the batched kernel counters described above.
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 156 Swift Testing tests in 35 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
 - Utilization and rate calculations: busy share, nice ticks, rollover from 2³² to 0, resets, zero elapsed ticks or time, core-count changes, and per-core failures.
 - Trackers: first sample, minimum window, empty windows that keep the baseline, interfaces appearing and disappearing, and counter resets that recover.
 - Disk capacity: utilization, zero total, available above total, and missing values.
-- Byte and percent formatting: unit boundaries, rounding up to the next unit, rates, and percentages.
+- Byte and percent formatting: decimal and binary units, compact menu bar forms, unit boundaries, and rounding up to the next unit.
+- Spoken formatting: unit wording, rates, percentages, and uptime.
 - Failure mapping for volume resource errors: permission denied, missing file, and other errors.
-- Provider behavior with scripted sources and a manual clock, so rates are exact: failures isolated per metric, exclusions, and volumes that stay listed when a read is denied.
-- The monitoring selection, its JSON round trip, and the model's toggles.
+- Provider behavior with scripted sources and a manual clock, so rates are exact.
+- Presentation models: usage levels and thresholds, CPU core labels, memory amounts and pressure badges, disk rows and free-space text, network rows and hidden interfaces, aggregate rates with partial failures, chart ceilings, menu bar text and its accessibility label, uptime and load text, and the sources toggles.
+- Metric history: bounded series, gaps stored as missing rather than zero, and network sums that are gaps when partial.
+- Simulated metrics: determinism, physical ranges, growing counters, the deliberate CPU gap, and default exclusions.
+- The monitoring selection, its JSON round trip, and the model: dashboard built on refresh, history capacity, source toggles that rebuild immediately, and the expanded state.
 - The sampling loop, which stops when cancelled.
+
+## Responsiveness measurement
+
+`scripts/swiftc-benchmark.sh` times the work done once per sample: appending to the bounded history and building the dashboard presentation. System reads are excluded, and the inputs are generated before timing starts. Optimized build (`-O`), 2,000 samples, 120-sample history, on the development Mac, two runs:
+
+| Measure | Run 1 | Run 2 |
+| --- | --- | --- |
+| Mean per sample | 39.2 µs | 43.2 µs |
+| Median per sample | 36.0 µs | 40.0 µs |
+| 95th percentile | 43.0 µs | 53.0 µs |
+| Worst single sample | 3.1 ms | 2.8 ms |
+
+Both runs show a worst-case sample of about 3 ms. That is consistent with a one-time warm-up, but I did not verify the cause. The history stayed at 120 samples per series. Those numbers cover data work only. Rendering the charts and the popover was not measured, because no display was driven. Frame rates are unverified.
 
 ## Accuracy check against system tools
 
@@ -129,6 +203,10 @@ Cause: Foundation's atomic writes (`Data.write(options: .atomic)`, `FileManager.
 
 SwiftPM is expected to work on a normal Mac with full Xcode. That expectation is unverified here. On such a machine, run `swift test` and `swift run macfleet-agent`.
 
+## Known limitation: SwiftUI macros in the Command Line Tools
+
+The Command Line Tools do not ship the SwiftUI macro plugin, so the `@State` property wrapper cannot be expanded there. For that reason the UI module uses no property wrappers. Views take presentation values and action closures, and the model holds the expanded state. The app target still uses `@State` for its model, so its full build needs Xcode.
+
 ## Build and launch the menu bar app (full Xcode)
 
 The app target needs Xcode because SwiftUI's `@State` macro plugin ships only with Xcode, not with the Command Line Tools.
@@ -141,11 +219,11 @@ The app target needs Xcode because SwiftUI's `@State` macro plugin ships only wi
    xcodebuild -project MacFleet.xcodeproj -scheme MacFleet -configuration Debug build
    ```
 
-4. Launch the built `MacFleet.app` from the `DerivedData` products folder shown in the build log. The app has no Dock icon (`LSUIElement`). Its icon, a server-rack SF Symbol, appears in the menu bar. Click it to open the popover, then use Refresh or Quit.
+4. Launch the built `MacFleet.app` from the `DerivedData` products folder shown in the build log. The app has no Dock icon (`LSUIElement`). Its menu bar item shows the compact statistics. Click it to open the popover, use Show details to expand it, then use Refresh or Quit.
 
 The menu bar label starts a sampling loop that refreshes every two seconds. Opening the popover or pressing Refresh also samples.
 
-Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the Disks and Network sections, and the Sources toggles. Only a copy of `App/MacFleetApp.swift` with `@State` replaced by `let` typechecked here, and the popover and its section views typechecked as a module.
+Not verified in this environment: the Xcode build, the app launch, the menu bar sampling loop, the popover layout, the charts' appearance, light and dark mode in a running app, the Disks and Network sections, and the Sources toggles. The views and previews typecheck as a module, and the app entry point typechecks with `@State` replaced by a plain property. Nothing was rendered.
 
 ## Run the agent
 
@@ -161,8 +239,10 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 
 - The bundle identifier `dev.macfleet.MacFleet` is a placeholder. Change `PRODUCT_BUNDLE_IDENTIFIER` before signing for distribution.
 - The app is ad-hoc signed for local runs (`CODE_SIGN_IDENTITY = "-"`). No team is configured.
-- The menu bar icon uses an SF Symbol rather than a custom asset.
+- The menu bar icon is an SF Symbol (`server.rack`) rather than a custom asset.
 - Snapshots are local to this Mac. Networking transport is not implemented; `FleetWireFormat` only defines the payload.
+- Memory now uses the binary formatter everywhere, so a memory total shows as "16 GB". The earlier popover used the system memory style, which can differ slightly.
+- Usage is shown as Elevated from 75% and Critical from 90%, for CPU, memory, and disks alike. Pressure maps warning to elevated and critical to critical.
 - Not included: interface MAC addresses, IPv6 addresses, wireless details, per-volume I/O throughput, and per-process network use.
 - The Xcode project has no test targets. Tests run through `scripts/swiftc-verify.sh` or `swift test`.
 - The Xcode project file is hand-written. It passes `plutil -lint`, but Xcode has not opened it here.

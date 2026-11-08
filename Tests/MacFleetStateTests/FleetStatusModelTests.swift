@@ -1,3 +1,4 @@
+import Foundation
 import MacFleetKit
 import MacFleetState
 import Testing
@@ -100,5 +101,54 @@ struct FleetStatusSelectionTests {
         #expect(!model.selection.monitorsVolume(at: "/Volumes/USB"))
         let latest = await provider.selections.last
         #expect(latest?.excludedVolumePaths == ["/Volumes/USB"])
+    }
+}
+
+@MainActor
+@Suite("Dashboard state in the model")
+struct FleetStatusDashboardTests {
+    @Test func refreshBuildsDashboardAndHistory() async {
+        let model = FleetStatusModel(provider: MockSystemMetricsProvider(), store: InMemorySnapshotStore())
+        #expect(model.dashboard == nil)
+
+        await model.refresh()
+        await model.refresh()
+
+        #expect(model.dashboard != nil)
+        #expect(model.history.cpu.samples.count == 2)
+        #expect(model.dashboard?.menuBar.cpuText == "25%")
+    }
+
+    @Test func historyCapacityIsRespected() async {
+        let model = FleetStatusModel(
+            provider: MockSystemMetricsProvider(),
+            store: InMemorySnapshotStore(),
+            historyCapacity: 2
+        )
+        for _ in 0..<5 {
+            await model.refresh()
+        }
+        #expect(model.history.cpu.samples.count == 2)
+        #expect(model.history.download.samples.count == 2)
+    }
+
+    @Test func togglingASourceRebuildsThePresentationImmediately() async {
+        let provider = SimulatedSystemMetricsProvider(seed: 42, now: { Date(timeIntervalSince1970: 1_700_000_000) })
+        let model = FleetStatusModel(provider: provider, store: InMemorySnapshotStore())
+        await model.refresh()
+        #expect(model.dashboard?.network.interfaces.availableValue?.contains { $0.id == "en0" } == true)
+
+        await model.setInterfaceMonitored("en0", false)
+
+        let en0 = model.dashboard?.sources.interfaces.availableValue?.first { $0.id == "en0" }
+        #expect(en0?.monitored == false)
+        #expect(model.dashboard?.network.interfaces.availableValue?.contains { $0.id == "en0" } == false)
+    }
+
+    @Test func detailsStateIsHeldByTheModel() {
+        let model = FleetStatusModel(provider: MockSystemMetricsProvider(), store: InMemorySnapshotStore())
+        #expect(model.isShowingDetails == false)
+        model.isShowingDetails.toggle()
+        #expect(model.isShowingDetails)
     }
 }
