@@ -19,6 +19,9 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `Sources/MacFleetKit/Alerts` | Alert metrics, settings and their persistence, notification permission and delivery (`UserNotificationAlertNotifier`), and recording mocks |
 | `Sources/MacFleetKit/Remote` | Remote metrics protocol: versioned JSON messages, framing, TLS with a pinned host identity, HMAC client authentication, the network policy, and host and client sessions |
 | `Sources/MacFleetKit/Agent` | Headless agent core: configuration, secret stores, structured logging, health reports, local address checks, and the agent lifecycle |
+| `Sources/MacFleetState/Remote` | Fleet state: session opening, failure classification, backoff, one watcher per Mac, and the unified overview model |
+| `Sources/MacFleetUI/Fleet` | The unified dashboard and the add-a-Mac form |
+| `docs/fleet-dashboard.md` | The Fleet window: pairing, trust, retries, storage, and limits |
 | `Sources/MacFleetHeadless` | The `macfleet-headless` command: `run`, `status`, `addresses`, `identity`, `credential`, and `fetch` |
 | `Support/launchd` | The LaunchAgent template for the headless agent (not installed by the repository) |
 | `docs/remote-protocol.md` | Protocol specification: identity model, authentication, wire format, compatibility rules, and threat model |
@@ -431,6 +434,19 @@ MacFleet can serve its metric snapshots to an authenticated client over TLS. The
 - Failed authentication attempts are logged by the headless agent, but they are not rate-limited, and there is no revocation list beyond removing a credential.
 - The app does not run a host. The headless agent does, and its secrets are kept in the keychain or an owner-only file (see below).
 
+## Multi-Mac fleet dashboard
+
+The **Fleet** window (opened from **Windows** in the popover) shows this Mac beside every remote Mac you register. A remote Mac is added by its Tailscale name or private IP address, and its certificate is trusted only after you compare its fingerprint with `macfleet-headless identity show` on that Mac. Each remote Mac keeps its own connection, snapshot, and retry clock. Transient failures retry with backoff, from 2 seconds up to 300. Failures that retries cannot fix stop and say what to do. The full guide, with the failure table and the limits, is [docs/fleet-dashboard.md](docs/fleet-dashboard.md).
+
+- **Trust.** Trust on first use, with the fingerprint shown for confirmation. A changed certificate is untrusted until reviewed, and an expired one is rejected by name.
+- **Storage.** The address, pin, and label are in user defaults. The client secret is in the login keychain, under its own service.
+- **Limits.** At most 16 remote Macs. The address is not resolved, so a name that resolves to a public address is not refused.
+
+### Limitations
+
+- The Fleet window was typechecked, not run, and the keychain store was not exercised by the automated tests.
+- Not verified on a real tailnet or with two physical Macs.
+
 ## Headless agent
 
 `macfleet-headless` is a separate command-line executable for running MacFleet without the menu bar. It samples the Mac at a configured interval, serves the latest sample to authenticated clients over TLS, writes a health report and a JSON-lines log, and stops cleanly on SIGTERM or SIGINT. The full guide is [docs/headless-agent.md](docs/headless-agent.md).
@@ -467,7 +483,7 @@ scripts/swiftc-history-check.sh
 
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 497 Swift Testing tests in 111 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, and 52 cover the headless agent), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 567 Swift Testing tests in 122 suites passed (33 of them cover processes, 47 cover alerts, 70 cover the remote protocol, 52 cover the headless agent, and 70 cover the fleet dashboard, including real loopback sessions), including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -483,6 +499,7 @@ The test suites cover:
 - Simulated metrics: determinism, physical ranges, growing counters, the deliberate CPU gap, and default exclusions.
 - The monitoring selection, its JSON round trip, and the model: dashboard built on refresh, history capacity, source toggles that rebuild immediately, and the expanded state.
 - The sampling loop, which stops when cancelled.
+- Fleet dashboard: address and record validation and storage, the identity probe over TLS, certificate change and expiry, failure classification, backoff, the connection loop with a manual clock (reconnection, failed authentication, unavailable hosts, dropped sessions, and stopping), pairing, removal, launch reconnection, per-Mac independence, the unified presentation, and loopback integration tests with simultaneous Macs on ports 21444 to 21450.
 - Headless agent: configuration validation, secret store permissions, structured log format and rotation, health rules, local address classification, and in-process integration tests that run a real agent and real TLS clients on loopback ports 21421 to 21432, covering snapshots, the status report, a disabled listener, a wrong secret, a disconnecting client, graceful shutdown with the notice, a failed sample, a listener that cannot bind, a missing secret, a second run, and an untrusted pin.
 - Remote protocol: every message's encoding, the envelope and date format on the wire, compatibility with unknown types, fields, and error codes, framing and the frame limits, version negotiation, the authentication proofs and transcript binding, credential and fingerprint validation, the network policy, identity import and pin acceptance, and loopback TLS sessions. The sessions cover a full handshake, refused credentials, a wrong pin, a refused network, a version mismatch, no metrics before authentication, an idle client, heartbeats, and teardown. The loopback suite is serialized and uses ports 21401–21411. Its identity tests need macOS 15.
 - Alerts: settings values and persistence, the engine's sustained periods, hysteresis, cooldown, sleep and unavailable handling with a simulated clock, the model's permission and posting paths, the status model's path, and the presentation wording (see Alerts).

@@ -8,22 +8,32 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
     let model: FleetStatusModel
     let processes = ProcessMonitorModel(monitor: ProcessMonitor())
     let alerts: AlertCenterModel
+    let fleet: FleetOverviewModel
     private var powerObservers: [NSObjectProtocol] = []
 
     override init() {
         let storage = HistoryStorage.open()
         let alerts = AlertCenterModel(notifier: UserNotificationAlertNotifier(), store: UserDefaultsAlertSettingsStore())
+        let fleet = FleetOverviewModel(
+            store: UserDefaultsRemoteHostStore(),
+            secrets: KeychainSecretStore(service: KeychainSecretStore.remoteService),
+            opener: MetricsClientSessionOpener(),
+            prober: MetricsRemoteHostProber()
+        )
         self.alerts = alerts
+        self.fleet = fleet
         model = FleetStatusModel(
             engine: SamplingEngine(provider: ProcessSystemMetricsProvider(), store: storage.store),
             historySource: storage.history,
             startupNotice: storage.notice,
-            alerts: alerts
+            alerts: alerts,
+            overview: fleet
         )
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        fleet.start()
         let center = NSWorkspace.shared.notificationCenter
         let model = model
         powerObservers = [
@@ -40,6 +50,7 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task {
             await model.shutdown()
+            await fleet.stopAll()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

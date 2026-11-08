@@ -7,15 +7,18 @@ public struct StatusPopoverView: View {
     private let model: FleetStatusModel
     private let onShowProcesses: () -> Void
     private let onShowAlerts: () -> Void
+    private let onShowFleet: () -> Void
 
     public init(
         model: FleetStatusModel,
         onShowProcesses: @escaping () -> Void,
-        onShowAlerts: @escaping () -> Void
+        onShowAlerts: @escaping () -> Void,
+        onShowFleet: @escaping () -> Void
     ) {
         self.model = model
         self.onShowProcesses = onShowProcesses
         self.onShowAlerts = onShowAlerts
+        self.onShowFleet = onShowFleet
     }
 
     public var body: some View {
@@ -83,6 +86,7 @@ public struct StatusPopoverView: View {
             .accessibilityHint(model.isShowingDetails ? "Collapses the graphs and details" : "Expands the graphs and details")
             Spacer()
             Menu("Windows") {
+                Button("Fleet", action: onShowFleet)
                 Button("Processes", action: onShowProcesses)
                 Button("Alerts", action: onShowAlerts)
             }

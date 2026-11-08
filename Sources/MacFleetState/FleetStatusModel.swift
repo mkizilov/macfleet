@@ -27,6 +27,7 @@ public final class FleetStatusModel {
     private let historySource: (any HistorySource)?
     private let startupNotice: String?
     private let alerts: AlertCenterModel?
+    private let overview: FleetOverviewModel?
     private var lastAppliedSequence: UInt64 = 0
     private var interactiveSampling: Task<Void, Never>?
     private var isPopoverVisible = false
@@ -38,12 +39,14 @@ public final class FleetStatusModel {
         historySource: (any HistorySource)? = nil,
         historyCapacity: Int = 120,
         startupNotice: String? = nil,
-        alerts: AlertCenterModel? = nil
+        alerts: AlertCenterModel? = nil,
+        overview: FleetOverviewModel? = nil
     ) {
         self.engine = engine
         self.historySource = historySource
         self.startupNotice = startupNotice
         self.alerts = alerts
+        self.overview = overview
         history = MetricHistory(capacity: historyCapacity)
         historyCard = HistoryCardPresentation(
             range: .hour,
@@ -206,6 +209,7 @@ public final class FleetStatusModel {
             self.snapshot = snapshot
             history.record(snapshot)
             alerts?.evaluate(snapshot)
+            overview?.updateLocal(snapshot)
             errorMessage = nil
             rebuildDashboard()
             refreshHistoryIfDue()

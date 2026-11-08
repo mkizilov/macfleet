@@ -182,11 +182,12 @@ struct RemoteLoopbackTests {
         let wrongPin = HostFingerprint(certificateDER: Data("a different certificate".utf8))
         try await withHost(port: 21404, identity: identity, credentials: [key]) { _ in
             let error = try await refusal(from: client(port: 21404, credential: key, pin: wrongPin))
-            #expect(error as? RemoteClientError != nil)
-            guard case .connectionFailed? = error as? RemoteClientError else {
-                Issue.record("a pin mismatch must fail the connection, got \(error)")
+            // The host showed its real certificate, so the failure names the identity change and the certificate shown.
+            guard case let .identityMismatch(presented)? = error as? RemoteClientError else {
+                Issue.record("a pin mismatch must report an identity change, got \(error)")
                 return
             }
+            #expect(presented == HostFingerprint(certificateDER: identity.certificateDER))
         }
     }
 

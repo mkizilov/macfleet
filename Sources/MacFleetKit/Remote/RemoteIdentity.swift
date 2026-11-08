@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import os
 import Security
 
 /// SHA-256 of a host's certificate. A client pins this value: it trusts a host only when the host's certificate has
@@ -85,28 +86,70 @@ public enum RemoteIdentityReader {
     }
 }
 
+/// The certificate a TLS connection was offered, recorded by the verify block. A failed connection reads it, so it can
+/// say which certificate was shown instead of only that the handshake failed.
+final class FingerprintObservation: Sendable {
+    private struct Seen: Sendable {
+        var fingerprint: HostFingerprint?
+        var rejection: String?
+    }
+
+    private let lock = OSAllocatedUnfairLock(initialState: Seen(fingerprint: nil, rejection: nil))
+
+    var value: HostFingerprint? {
+        lock.withLock { $0.fingerprint }
+    }
+
+    /// Why the pinned check refused the certificate, when it did. Nil when it accepted it or never ran.
+    var rejection: String? {
+        lock.withLock { $0.rejection }
+    }
+
+    func record(_ fingerprint: HostFingerprint?, rejection: String? = nil) {
+        lock.withLock { $0 = Seen(fingerprint: fingerprint, rejection: rejection) }
+    }
+}
+
 /// The client's check of the host's certificate during the TLS handshake. Trust comes only from the pin.
 enum RemoteTrustPolicy {
+    /// The fingerprint of the leaf certificate a peer presented, or nil when it presented none.
+    static func leafFingerprint(_ trust: SecTrust) -> HostFingerprint? {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = chain.first else {
+            return nil
+        }
+        return HostFingerprint(certificateDER: SecCertificateCopyData(leaf) as Data)
+    }
+
     /// Accepts the peer only when its leaf certificate has the pinned fingerprint, and when the certificate itself
     /// passes a basic X.509 check (validity dates and signature) with no other anchor. The system trust store is not
     /// consulted.
     static func accepts(_ trust: SecTrust, pinned: HostFingerprint) -> Bool {
+        rejection(trust, pinned: pinned) == nil
+    }
+
+    /// Why the peer's certificate is refused, or nil when it is accepted. A certificate that is not the pinned one is
+    /// refused by fingerprint. A pinned certificate that fails the X.509 check, such as an expired one, is refused with the
+    /// reason the check gave.
+    static func rejection(_ trust: SecTrust, pinned: HostFingerprint) -> String? {
         guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = chain.first else {
-            return false
+            return "the host presented no certificate"
         }
-        guard HostFingerprint(certificateDER: SecCertificateCopyData(leaf) as Data) == pinned else {
-            return false
+        guard leafFingerprint(trust) == pinned else {
+            return "the certificate is not the pinned one"
         }
         var anchored: SecTrust?
         guard SecTrustCreateWithCertificates([leaf] as CFArray, SecPolicyCreateBasicX509(), &anchored) == errSecSuccess,
               let anchored
         else {
-            return false
+            return "the certificate could not be checked"
         }
         SecTrustSetAnchorCertificates(anchored, [leaf] as CFArray)
         SecTrustSetAnchorCertificatesOnly(anchored, true)
         var error: CFError?
-        return SecTrustEvaluateWithError(anchored, &error)
+        guard SecTrustEvaluateWithError(anchored, &error) else {
+            return error.map { CFErrorCopyDescription($0) as String } ?? "the certificate failed its checks"
+        }
+        return nil
     }
 }
 
@@ -123,11 +166,25 @@ enum RemoteTLS {
         return options
     }
 
-    static func clientOptions(pinned: HostFingerprint) -> NWProtocolTLS.Options {
+    /// With a pin, only the pinned certificate is accepted. Without one, this is a probe for trust-on-first-use: any
+    /// certificate is accepted, its fingerprint is recorded, and the caller must confirm it before pairing.
+    static func clientOptions(
+        pinned: HostFingerprint?,
+        observation: FingerprintObservation = FingerprintObservation()
+    ) -> NWProtocolTLS.Options {
         let options = NWProtocolTLS.Options()
         sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
         sec_protocol_options_set_verify_block(options.securityProtocolOptions, { _, trust, complete in
-            complete(RemoteTrustPolicy.accepts(sec_trust_copy_ref(trust).takeRetainedValue(), pinned: pinned))
+            let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
+            let presented = RemoteTrustPolicy.leafFingerprint(secTrust)
+            if let pinned {
+                let rejection = RemoteTrustPolicy.rejection(secTrust, pinned: pinned)
+                observation.record(presented, rejection: rejection)
+                complete(rejection == nil)
+            } else {
+                observation.record(presented)
+                complete(presented != nil)
+            }
         }, DispatchQueue(label: "macfleet.remote.trust"))
         return options
     }

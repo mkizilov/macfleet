@@ -14,7 +14,8 @@ struct MacFleetApp: App {
             StatusPopoverView(
                 model: appDelegate.model,
                 onShowProcesses: { showWindow("processes") },
-                onShowAlerts: { showWindow("alerts") }
+                onShowAlerts: { showWindow("alerts") },
+                onShowFleet: { showWindow("fleet") }
             )
         } label: {
             MenuBarLabelView(presentation: appDelegate.model.dashboard?.menuBar)
@@ -28,6 +29,10 @@ struct MacFleetApp: App {
 
         Window("Alert Settings", id: "alerts") {
             AlertSettingsWindowContent(model: appDelegate.alerts)
+        }
+
+        Window("Fleet", id: "fleet") {
+            FleetWindowContent(model: appDelegate.fleet)
         }
     }
 
@@ -53,6 +58,30 @@ private struct ProcessWindowContent: View {
         )
         .onAppear { model.processesDidAppear() }
         .onDisappear { Task { await model.processesDidDisappear() } }
+    }
+}
+
+/// Connects the fleet window to its model. Each action runs on the main actor, where the model lives.
+private struct FleetWindowContent: View {
+    let model: FleetOverviewModel
+
+    var body: some View {
+        FleetOverviewView(
+            presentation: model.presentation,
+            onField: { field, value in MainActor.assumeIsolated { model.setDraft(field, value) } },
+            onCheck: { MainActor.assumeIsolated { model.beginPairing() } },
+            onConfirm: { MainActor.assumeIsolated { model.confirmPairing() } },
+            onCancel: { MainActor.assumeIsolated { model.cancelPairing() } },
+            onAction: { id, action in
+                MainActor.assumeIsolated {
+                    switch action {
+                    case .reconnect: model.retry(id)
+                    case .trustAgain: model.beginTrustAgain(id)
+                    case .remove: model.remove(id)
+                    }
+                }
+            }
+        )
     }
 }
 

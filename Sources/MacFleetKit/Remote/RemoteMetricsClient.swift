@@ -31,12 +31,15 @@ public enum RemoteUpdate: Equatable, Sendable {
     case snapshot(RemoteSnapshot)
 }
 
-/// Why a session ended. A TLS verification failure appears as `connectionFailed`, and its text names the cause.
+/// Why a session ended. A TLS verification failure appears as `connectionFailed`, unless the host showed a certificate
+/// other than the pinned one, which is `identityMismatch` with the certificate that was shown.
 public enum RemoteClientError: Error, Equatable, Sendable {
     case invalidEndpoint
     case connectionFailed(String)
-    /// The host's fingerprint is not the one this client pinned.
-    case identityMismatch
+    /// The host's certificate is not the one this client pinned. `presented` is the certificate it showed.
+    case identityMismatch(presented: HostFingerprint?)
+    /// The pinned certificate failed its own checks, such as its validity dates. `reason` says which check failed.
+    case certificateRejected(reason: String)
     case hostRejected(RemoteProtocolError)
     /// The host's proof did not verify, so the host does not hold the shared secret. The client trusts nothing it sent.
     case hostNotAuthenticated
@@ -81,22 +84,23 @@ public actor RemoteMetricsClient {
         interval: SamplingInterval,
         into continuation: AsyncThrowingStream<RemoteUpdate, any Error>.Continuation
     ) async {
+        let observation = FingerprintObservation()
         do {
-            let connection = try makeConnection()
+            let connection = try makeConnection(observation: observation)
             defer { Task { await connection.close() } }
             try await session(connection: connection, interval: interval, continuation: continuation)
             continuation.finish()
         } catch {
-            continuation.finish(throwing: Self.clientError(for: error))
+            continuation.finish(throwing: RemoteClientError.translating(error, observation: observation, pinned: pinnedHost))
         }
     }
 
-    private func makeConnection() throws -> RemoteConnection {
+    private func makeConnection(observation: FingerprintObservation) throws -> RemoteConnection {
         guard !endpoint.host.isEmpty, let port = NWEndpoint.Port(rawValue: endpoint.port) else {
             throw RemoteClientError.invalidEndpoint
         }
         let parameters = NWParameters(
-            tls: RemoteTLS.clientOptions(pinned: pinnedHost),
+            tls: RemoteTLS.clientOptions(pinned: pinnedHost, observation: observation),
             tcp: NWProtocolTCP.Options()
         )
         let connection = NWConnection(host: NWEndpoint.Host(endpoint.host), port: port, using: parameters)
@@ -124,7 +128,9 @@ public actor RemoteMetricsClient {
         guard supportedVersions.contains(accepted.version) else {
             throw RemoteClientError.protocolViolation("the host chose a version this client does not offer")
         }
-        guard hostHello.host.fingerprint == pinnedHost else { throw RemoteClientError.identityMismatch }
+        guard hostHello.host.fingerprint == pinnedHost else {
+            throw RemoteClientError.identityMismatch(presented: hostHello.host.fingerprint)
+        }
         guard let binding = await connection.channelBinding() else {
             throw RemoteClientError.protocolViolation("the secure channel is not ready")
         }
@@ -213,21 +219,35 @@ public actor RemoteMetricsClient {
         RemoteClientError.protocolViolation("the host sent a message out of order")
     }
 
-    /// Maps the errors below the client onto the client's own error, so callers see one vocabulary.
-    private static func clientError(for error: Error) -> RemoteClientError {
+}
+
+extension RemoteClientError {
+    /// Maps the errors below the client onto the client's own error, so callers see one vocabulary. A connection that
+    /// failed because the host showed another certificate is an identity change, and one that failed because the pinned
+    /// certificate did not pass its checks is a rejected certificate. Neither is a generic failure.
+    static func translating(_ error: Error, observation: FingerprintObservation, pinned: HostFingerprint?) -> RemoteClientError {
         switch error {
         case let clientError as RemoteClientError:
-            clientError
+            return clientError
         case let transport as RemoteTransportError:
             switch transport {
-            case let .connectionFailed(description): .connectionFailed(description)
-            case .closed: .closed
-            case .timedOut: .timedOut
+            case let .connectionFailed(description):
+                if let presented = observation.value, let pinned, presented != pinned {
+                    return .identityMismatch(presented: presented)
+                }
+                if let reason = observation.rejection {
+                    return .certificateRejected(reason: reason)
+                }
+                return .connectionFailed(description)
+            case .closed:
+                return .closed
+            case .timedOut:
+                return .timedOut
             }
         case let violation as RemoteProtocolViolation:
-            .protocolViolation(String(describing: violation))
+            return .protocolViolation(String(describing: violation))
         default:
-            .connectionFailed(error.localizedDescription)
+            return .connectionFailed(error.localizedDescription)
         }
     }
 }

@@ -153,12 +153,18 @@ public struct ProtectedFileSecretStore: AgentSecretStore {
     }
 }
 
-/// Secrets in the login keychain, under the service `com.macfleet.headless`. The keychain is only used when the
-/// configuration asks for it. It is not exercised by the automated tests, because they must not change the keychain.
+/// Secrets in the login keychain, under one service name per use: the headless agent's by default, and the app's for
+/// its remote Macs. The keychain is only used when the configuration asks for it. It is not exercised by the automated
+/// tests, because they must not change the keychain.
 public struct KeychainSecretStore: AgentSecretStore {
-    public static let service = "com.macfleet.headless"
+    public static let defaultService = "com.macfleet.headless"
+    public static let remoteService = "com.macfleet.app.remote"
 
-    public init() {}
+    private let service: String
+
+    public init(service: String = defaultService) {
+        self.service = service
+    }
 
     public func secret(for account: String) throws -> Data? {
         var query = baseQuery(account)
@@ -199,7 +205,7 @@ public struct KeychainSecretStore: AgentSecretStore {
     private func baseQuery(_ account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
     }
@@ -223,5 +229,10 @@ public final class MemoryAgentSecretStore: AgentSecretStore, Sendable {
 
     public func removeSecret(for account: String) throws {
         values.withLock { $0[account] = nil }
+    }
+
+    /// The accounts that currently hold a secret, sorted. Tests use it to check what was saved and what was forgotten.
+    public func accounts() -> [String] {
+        values.withLock { Array($0.keys).sorted() }
     }
 }
