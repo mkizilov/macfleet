@@ -95,18 +95,11 @@ public struct ProcessSystemMetricsProvider: SystemMetricsProviding {
         _ provider: any MetricProvider<Output>,
         _ context: SampleContext
     ) async -> MetricReading<Output> {
-        let deadline = sampleTimeout
-        return await withTaskGroup(of: MetricReading<Output>?.self) { group in
-            group.addTask { () -> MetricReading<Output>? in
-                await provider.sample(context)
-            }
-            group.addTask { () -> MetricReading<Output>? in
-                try? await Task.sleep(for: deadline, clock: .suspending)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? .unavailable(.timedOut)
+        switch await raceAgainstDeadline(sampleTimeout, { await provider.sample(context) }) {
+        case let .finished(reading):
+            return reading
+        case .timedOut:
+            return .unavailable(.timedOut)
         }
     }
 }

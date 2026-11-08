@@ -1,0 +1,9 @@
+// Signing defaults. No credential is needed to build or run: "-" signs ad hoc, which runs on the Mac that built it.
+// Hardened runtime is on for every build, as notarization requires it.
+//
+// Distribution uses a Developer ID. Set MACFLEET_SIGN_IDENTITY when packaging, or put the identity in
+// Config/Signing.local.xcconfig. That file is git-ignored, so an identity and its team never reach the repository.
+// docs/distribution.md has the steps.
+CODE_SIGN_IDENTITY = -
+CODE_SIGN_STYLE = Automatic
+ENABLE_HARDENED_RUNTIME = YES

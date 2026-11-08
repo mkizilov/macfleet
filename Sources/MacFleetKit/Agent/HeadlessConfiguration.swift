@@ -72,6 +72,29 @@ public struct HeadlessConfiguration: Codable, Equatable, Sendable {
     /// Where the diagnostic log is written. Nil uses `~/Library/Logs/MacFleet/headless.log`.
     public var logPath: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case displayName, listenAddress, port, identityPath, clientIDs, secretStore
+        case samplingIntervalSeconds, allowedNetworks, statusPath, logPath
+    }
+
+    /// The fields the documentation lists as optional take the documented defaults when they are absent. Only
+    /// `displayName` and `secretStore` are required.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            displayName: try container.decode(String.self, forKey: .displayName),
+            listenAddress: try container.decodeIfPresent(String.self, forKey: .listenAddress),
+            port: try container.decodeIfPresent(UInt16.self, forKey: .port) ?? RemoteProtocol.defaultPort,
+            identityPath: try container.decodeIfPresent(String.self, forKey: .identityPath),
+            clientIDs: try container.decodeIfPresent([String].self, forKey: .clientIDs) ?? [],
+            secretStore: try container.decode(SecretStoreChoice.self, forKey: .secretStore),
+            samplingIntervalSeconds: try container.decodeIfPresent(Double.self, forKey: .samplingIntervalSeconds) ?? 10,
+            allowedNetworks: try container.decodeIfPresent([String].self, forKey: .allowedNetworks),
+            statusPath: try container.decodeIfPresent(String.self, forKey: .statusPath),
+            logPath: try container.decodeIfPresent(String.self, forKey: .logPath)
+        )
+    }
+
     public init(
         displayName: String,
         listenAddress: String? = nil,

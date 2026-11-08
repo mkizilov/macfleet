@@ -1,36 +1,5 @@
 import Foundation
 
-/// Resolves a collection exactly once, with whichever of the provider or the deadline finishes first.
-/// Nothing waits on the losing task, so a provider that never returns cannot hold the caller.
-private actor CollectionGate {
-    struct Outcome: Sendable {
-        let update: SamplingUpdate
-        let isProviderFinished: Bool
-    }
-
-    private var outcome: Outcome?
-    private var waiter: CheckedContinuation<Outcome, Never>?
-
-    var value: Outcome {
-        get async {
-            if let outcome {
-                return outcome
-            }
-            return await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
-                waiter = continuation
-            }
-        }
-    }
-
-    func finish(_ update: SamplingUpdate, fromProvider: Bool) {
-        guard outcome == nil else { return }
-        let resolved = Outcome(update: update, isProviderFinished: fromProvider)
-        outcome = resolved
-        waiter?.resume(returning: resolved)
-        waiter = nil
-    }
-}
-
 enum SamplingError: LocalizedError {
     case collectionTimedOut
 
@@ -239,29 +208,21 @@ public actor SamplingEngine {
         let provider = provider
         let selection = selection
         let store = store
-        let deadline = collectionDeadline
-        let gate = CollectionGate()
-        let work = Task {
-            let update: SamplingUpdate
+        let outcome = await raceAgainstDeadline(collectionDeadline) { () -> SamplingUpdate in
             do {
                 let snapshot = try await provider.snapshot(selection: selection)
                 await store.save(snapshot)
-                update = .sample(sequence: number, snapshot: snapshot)
+                return .sample(sequence: number, snapshot: snapshot)
             } catch {
-                update = .failed(sequence: number, message: error.localizedDescription)
+                return .failed(sequence: number, message: error.localizedDescription)
             }
-            await gate.finish(update, fromProvider: true)
         }
-        let timer = Task {
-            try? await Task.sleep(for: deadline, clock: .suspending)
-            await gate.finish(.failed(sequence: number, message: SamplingError.collectionTimedOut.localizedDescription), fromProvider: false)
+        switch outcome {
+        case let .finished(update):
+            return update
+        case .timedOut:
+            return .failed(sequence: number, message: SamplingError.collectionTimedOut.localizedDescription)
         }
-        let outcome = await gate.value
-        timer.cancel()
-        if !outcome.isProviderFinished {
-            work.cancel()
-        }
-        return outcome.update
     }
 
     /// Wall time advanced more than awake monotonic time did, so the machine slept in between.

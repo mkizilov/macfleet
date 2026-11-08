@@ -1,0 +1,7 @@
+// Version metadata. This file is the source for the app bundle, the headless package, and the release scripts.
+// The Xcode project carries the same MARKETING_VERSION and CURRENT_PROJECT_VERSION in both configurations, and
+// MacFleetKitTests (ReleaseMetadataTests) and scripts/check-release.sh fail when they drift from this file.
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+MACFLEET_BUNDLE_ID = dev.macfleet.MacFleet
+MACFLEET_MIN_MACOS = 14.0

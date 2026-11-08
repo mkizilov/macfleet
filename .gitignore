@@ -9,3 +9,6 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 .cortexkit/
+# Release packages and local signing overrides. Developer ID identities and notary profiles are never committed.
+dist/
+Config/*.local.xcconfig

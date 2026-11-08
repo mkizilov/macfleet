@@ -18,6 +18,8 @@ usage: macfleet-headless <command> [options]
 
   run --config PATH                    Run the agent until SIGTERM or SIGINT. Exit 0 on a clean stop, 1 on failure.
   status --config PATH                 Print the health report. Exit 0 when healthy, 1 when not, 2 when there is none.
+  version                              Print the version and the remote protocol version.
+  check --config PATH                  Validate the configuration without starting the agent. Exit 0 when valid.
   addresses                            List this Mac's addresses, for choosing a listenAddress.
   identity show --config PATH          Print the host fingerprint that clients must pin.
   identity passphrase --config PATH    Store the identity passphrase, read from standard input.
@@ -237,12 +239,23 @@ func fetchCommand(_ arguments: [String]) async throws -> Int32 {
     return Exit.success
 }
 
+func checkCommand(_ arguments: [String]) throws -> Int32 {
+    let configuration = try loadConfiguration(arguments)
+    say("configuration is valid: \(configuration.displayName), port \(configuration.port)")
+    return Exit.success
+}
+
 func dispatch(_ arguments: [String]) async throws -> Int32 {
     switch arguments.first {
     case "run":
         return try await runAgent(arguments)
     case "status":
         return try statusCommand(arguments)
+    case "version":
+        say(MacFleetVersion.description)
+        return Exit.success
+    case "check":
+        return try checkCommand(arguments)
     case "addresses":
         return addressesCommand()
     case "identity":

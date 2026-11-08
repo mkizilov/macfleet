@@ -1,0 +1,78 @@
+name: CI
+
+# Runs on every push and pull request. No job needs a secret, a signing identity, or a notarization profile.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Release files
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check scripts, property lists, and version settings
+        run: sh scripts/check-release.sh
+
+  test:
+    name: Build and test
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run every suite
+        run: sh scripts/swiftc-verify.sh
+      - name: Keep the verify log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-log
+          path: .agent-local/verify.log
+          if-no-files-found: ignore
+
+  performance:
+    name: Performance budgets
+    runs-on: macos-14
+    needs: test
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the benchmarks against the budgets
+        run: sh scripts/performance-check.sh | tee performance.log
+      - name: Keep the performance log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-log
+          path: performance.log
+          if-no-files-found: ignore
+
+  package:
+    name: Package with ad hoc signing
+    runs-on: macos-14
+    needs: test
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the packages
+        run: sh scripts/package-app.sh
+      - name: Check the checksums
+        working-directory: dist
+        run: shasum -a 256 -c SHA256SUMS
+      - name: Keep the packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: macfleet-packages
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/signing-report-*.txt
+          if-no-files-found: error
