@@ -31,6 +31,92 @@ MacFleet is a native macOS menu bar application written in Swift 6 and SwiftUI. 
 | `scripts/swiftc-benchmark.sh` | Optimized measurement of the per-sample dashboard work |
 | `scripts/swiftc-test-runner/main.swift` | Entry point that runs the Swift Testing suites from the script |
 | `scripts/swiftc-benchmark/main.swift` | Benchmark driver for the script above |
+| `Sources/MacFleetKit/History` | Historical metrics: SQLite store, tiers, rollup, retention, recovery, and history series |
+| `scripts/swiftc-history-check.sh` | Crash-consistency checks and storage measurements for the history store |
+| `scripts/swiftc-history-check/main.swift` | Driver for the crash checks, the torn-write case, and the benchmark |
+
+## Historical metrics
+
+Samples are stored in a SQLite database at `~/Library/Application Support/MacFleet/history.sqlite`, which the app opens at launch.
+
+SwiftData was not used. Its `@Model` macro plugin is not in the Command Line Tools, so it could not be compiled or tested here. SQLite ships in the macOS SDK and needs no installation, and it gives direct control over transactions, integrity checks, and query plans, which the recovery rules depend on.
+
+### What is stored
+
+Each point holds CPU, memory, download and upload rates (summed over monitored interfaces, and missing when any monitored interface lacks a rate, as on the dashboard), and utilization of each browsable, monitored volume. Each value is kept as a sum, count, and maximum, so coarser buckets merge exactly and means are computed when read. A missing reading is stored as a zero count, never as zero.
+
+### Tiers, downsampling, and batching
+
+| Tier | Resolution | Default retention | Built from |
+| --- | --- | --- | --- |
+| Raw | one point per 10 seconds | 2 days | accepted snapshots |
+| Five-minute | 5 minutes | 14 days | raw points |
+| Hourly | 1 hour | 90 days | five-minute buckets |
+
+- **Downsampling.** A snapshot closer than 10 seconds to the previous accepted one is skipped. The popover's 2-second cadence therefore writes one point in five.
+- **Batching.** Points are buffered and written in one transaction when 32 are waiting, when the oldest has waited 300 seconds, and before any read, rollup, sleep, or shutdown.
+- **Rollup.** Only closed buckets are rolled up, in the same transaction as the horizon that records how far the tier is complete, and rollup always runs before pruning.
+
+### Queries
+
+`series(range:now:)` returns one value per slot: 60 one-minute slots for the last hour, 288 five-minute slots for the last day, and 168 hourly slots for the last week. Each range reads one tier. Where the tier has not rolled up the newest part of the range yet, the next finer tier supplies it, so nothing is missing and nothing is counted twice. Range reads use the primary key (checked with `EXPLAIN QUERY PLAN` in the tests).
+
+### Retention
+
+`HistoryRetention` sets each tier's retention. It rejects values below the minimums the charts need: raw 2 hours, five-minute 2 days, hourly 8 days. The app uses the defaults. Retention is configurable in code but not yet in the UI.
+
+### Recovery
+
+- Each write is one transaction. A write that never reached COMMIT is rolled back when its connection closes. A test checks this directly.
+- At open, `PRAGMA quick_check` runs. A damaged file is moved aside with its `-wal` and `-shm` files, as `history.sqlite.damaged-<time>-<id>`, and a new file starts. The history card shows the notice. Nothing is deleted.
+- The schema version is stored. A file with an unknown version is not opened.
+- Failed writes are kept, up to 1,000 points, counted, and reported in the history card. Live monitoring continues.
+- If the file cannot be opened, history falls back to memory for this session, with a notice. If that fails too, history is unavailable, with a notice.
+
+### Threading
+
+`MetricHistoryStore` is an actor. Its SQLite work runs on the actor's executor, never on the main actor. Results cross to the UI as values. The main actor builds at most four charts from at most 288 values per refresh. The one storage call on the main thread is opening the file at launch, which runs the integrity check and upkeep. It took 6.6 ms for a week of data.
+
+The history section reloads at most every 30 seconds while it is open, and never while it is closed.
+
+### Measured
+
+`scripts/swiftc-history-check.sh`, optimized build, development Mac (arm64):
+
+| Measure | Result |
+| --- | --- |
+| Snapshots offered over 7 days at a 2-second cadence | 302,400 |
+| Accepted after 10-second downsampling | 60,480 (241,920 skipped) |
+| Transactions for those points | 2,015 |
+| Rows written (points plus volume rows) | 181,353 |
+| Time inside `save()`, total / mean / slowest | 671.6 ms / 2.2 µs / 3.83 ms |
+| Stored after 7 days: raw, five-minute, hourly | 17,281, 2,015, 168 points |
+| Series query, median of 20: hour / day / week | 0.23 / 0.29 / 0.21 ms |
+| Reopen with integrity check and upkeep | 6.62 ms |
+| Files after the run: database / write-ahead log | 3.34 MB / 1.94 MB |
+| Resident memory: before / after writes | 5.9 MB / 11.0 MB |
+
+An earlier version batched on a 30-second age, so 10-second points were written four at a time: 16,127 transactions for the same week. The regression test `defaultBatchingWritesFarLessOftenThanEveryFewPoints` pins the fixed default. Restoring the old value makes it fail.
+
+### Crash checks
+
+`scripts/swiftc-history-check.sh` runs three kinds of crash test against real files:
+
+- **Batches**, 20 trials. A writer is killed with SIGKILL at a random moment. Rollups are off, so each commit is exactly one full batch. The file must hold every batch the writer confirmed, at most one more batch, and only whole batches. Result: 20 of 20 consistent.
+- **Upkeep**, 20 trials. The same kill, with rollups and pruning running during the writes. Every five-minute bucket must hold exactly the samples of its raw points, counted once. Result: 20 of 20 consistent.
+- **Torn**, 5 trials. The writer stages 500 rows in a transaction and kills itself before COMMIT, so the timing is deterministic. The file must hold only the 300 committed points. Result: 5 of 5.
+
+Random kills do not guarantee a kill inside a transaction. The torn trials do, and the in-process rollback test covers the same property.
+
+### Limitations
+
+- A hard crash can lose up to 300 seconds of raw points still in memory. A clean quit and sleep both write them first.
+- Timestamps are wall-clock. A backward clock jump is accepted, but it can leave points below an already rolled-up horizon as raw points that are never rolled up. They are pruned with the raw tier.
+- Rollup and pruning are tested by random kills and by the in-process rollback, not by a deterministic kill inside a rollup transaction.
+- Only browsable, monitored volumes are stored.
+- If the app is closed for longer than a tier's retention, the missing span stays a gap.
+- The history charts were typechecked, not rendered in a running app.
+- Measured only over seven simulated days. Longer runs, real sleep and wake cycles, and multi-week file growth were not measured.
 
 ## Sampling engine
 
@@ -191,15 +277,18 @@ Run from the repository root.
 ```sh
 scripts/swiftc-verify.sh
 scripts/swiftc-benchmark.sh
+scripts/swiftc-history-check.sh
 ```
 
 `scripts/swiftc-verify.sh` typechecks the manifest, builds `MacFleetKit` and `MacFleetState` as dylibs, typechecks `MacFleetUI` (including the dashboard, components, and previews), builds and runs `macfleet-agent`, then compiles and runs the Swift Testing suites. It exits non-zero on the first failure. Outputs go to `.agent-local/swiftc-build/`, which is git-ignored. Remove it with `rm -rf .agent-local/swiftc-build`.
 
 `scripts/swiftc-benchmark.sh` builds the kit and state layers with optimization and runs the dashboard benchmark. Its outputs are removed on exit.
 
+`scripts/swiftc-history-check.sh` builds MacFleetKit with optimization and runs the crash checks and the seven-day storage benchmark described under Historical metrics. `TRIALS` sets the number of random kill trials per pattern (default 20). Outputs are removed on exit. It takes a few minutes.
+
 The script uses the Command Line Tools SDK by default. Override with `DEV=/path/to/Developer` or `SDK=/path/to/MacOSX.sdk`.
 
-Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 193 Swift Testing tests in 43 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
+Last run result: manifest, all modules, the UI typecheck, and the agent passed with no compiler warnings. All 251 Swift Testing tests in 57 suites passed, including live tests that call the real Mach, FileManager, and getifaddrs/sysctl APIs on this Mac. The sampling tests are deterministic (virtual time), and the full pipeline passed five consecutive runs. The app entry point also typechecks with `@State` replaced by a plain property (see the limitation below).
 
 The test suites cover:
 
@@ -252,6 +341,10 @@ Taken on the development Mac (arm64, 10 logical CPUs, 16 GB, macOS 27.2 build 26
 Cause: Foundation's atomic writes (`Data.write(options: .atomic)`, `FileManager.createFile`) and item-replacement directories fail with EPERM in this sandbox. Plain writes, `rename`, `renamex_np`, `flock`, `fcntl` locks, and symlinks all work. SwiftPM relies on the failing path. The fix belongs to the sandbox or toolchain, not the repository.
 
 SwiftPM is expected to work on a normal Mac with full Xcode. That expectation is unverified here. On such a machine, run `swift test` and `swift run macfleet-agent`.
+
+## Known limitation: SwiftData
+
+SwiftData is not used. Its `@Model` macro plugin is missing from the Command Line Tools, so storage cannot be built or tested here with that framework. History uses SQLite (see Historical metrics). A full Xcode build could use SwiftData, but that would be a new storage layer, not a drop-in change.
 
 ## Known limitation: SwiftUI macros in the Command Line Tools
 

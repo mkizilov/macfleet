@@ -27,6 +27,7 @@ extension ChartRole {
         case .memory: .purple
         case .download: .green
         case .upload: .orange
+        case .disk: .teal
         }
     }
 }

@@ -5,11 +5,18 @@ import MacFleetState
 /// Owns the model and connects app-level events to the sampling engine: sleep, wake, and termination.
 @MainActor
 final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
-    let model = FleetStatusModel(
-        provider: ProcessSystemMetricsProvider(),
-        store: InMemorySnapshotStore()
-    )
+    let model: FleetStatusModel
     private var powerObservers: [NSObjectProtocol] = []
+
+    override init() {
+        let storage = HistoryStorage.open()
+        model = FleetStatusModel(
+            engine: SamplingEngine(provider: ProcessSystemMetricsProvider(), store: storage.store),
+            historySource: storage.history,
+            startupNotice: storage.notice
+        )
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let center = NSWorkspace.shared.notificationCenter
@@ -24,7 +31,7 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
         ]
     }
 
-    /// Replies only after sampling has stopped, so no collection is cut off mid-write.
+    /// Replies only after sampling has stopped and pending history is written, so nothing is cut off mid-write.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Task {
             await model.shutdown()
@@ -39,5 +46,35 @@ final class MacFleetAppDelegate: NSObject, NSApplicationDelegate {
             center.removeObserver(observer)
         }
         powerObservers = []
+    }
+}
+
+/// Where history is kept, and what to do when the file cannot be opened. Live monitoring keeps running in every
+/// case, and the notice tells the user what is not being saved.
+private struct HistoryStorage {
+    let store: any SnapshotStoring
+    let history: (any HistorySource)?
+    let notice: String?
+
+    static func open() -> HistoryStorage {
+        do {
+            let store = try MetricHistoryStore.open(at: try MetricHistoryStore.defaultLocation())
+            return HistoryStorage(store: store, history: store, notice: store.recoveryNote)
+        } catch let fileError {
+            do {
+                let memory = try MetricHistoryStore.inMemory()
+                return HistoryStorage(
+                    store: memory,
+                    history: memory,
+                    notice: "History is kept for this session only: \(fileError.localizedDescription)"
+                )
+            } catch let memoryError {
+                return HistoryStorage(
+                    store: InMemorySnapshotStore(),
+                    history: nil,
+                    notice: "History is unavailable: \(fileError.localizedDescription) \(memoryError.localizedDescription)"
+                )
+            }
+        }
     }
 }

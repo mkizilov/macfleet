@@ -324,6 +324,7 @@ public actor SamplingEngine {
     public func suspend() async {
         isSuspended = true
         await stopLoop()
+        await store.flush()
     }
 
     /// The machine woke. Drop rate baselines (counters may have reset across sleep) and sample again now.
@@ -346,5 +347,6 @@ public actor SamplingEngine {
             subscriber.continuation.finish()
         }
         await stopLoop()
+        await store.flush()
     }
 }

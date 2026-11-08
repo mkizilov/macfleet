@@ -64,7 +64,7 @@ public struct MemoryPresentation: Equatable, Sendable {
     private static func usageReading(_ reading: MetricReading<MemoryUsage>) -> Presented<UsageValue> {
         switch reading {
         case let .available(memory):
-            guard let fraction = MemoryFraction.used(.available(memory)) else {
+            guard let fraction = memory.usedFraction else {
                 return .unavailable("Total memory is unknown")
             }
             return .available(UsageValue(fraction: fraction))

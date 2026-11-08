@@ -61,6 +61,7 @@ public enum ChartRole: Equatable, Sendable {
     case memory
     case download
     case upload
+    case disk
 }
 
 public struct ChartSeries: Equatable, Sendable {

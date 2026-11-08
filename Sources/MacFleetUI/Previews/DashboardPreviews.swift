@@ -17,6 +17,11 @@ enum DashboardPreviewData {
         }
         return DashboardPresentation(snapshot: snapshot, history: history, selection: .default)
     }
+
+    static func history(range: HistoryRange = .day) -> HistoryCardPresentation {
+        let series = MockHistorySource.makeSeries(range: range, now: Date(timeIntervalSince1970: 1_767_225_600))
+        return HistoryCardPresentation(range: range, content: .loaded(HistoryPresentation(series: series)), notice: nil)
+    }
 }
 
 struct DashboardPreviews: PreviewProvider {
@@ -25,8 +30,10 @@ struct DashboardPreviews: PreviewProvider {
             DashboardContentView(
                 dashboard: DashboardPreviewData.dashboard(),
                 isExpanded: true,
+                history: DashboardPreviewData.history(),
                 onSetVolumeMonitored: { _, _ in },
-                onSetInterfaceMonitored: { _, _ in }
+                onSetInterfaceMonitored: { _, _ in },
+                onSelectHistoryRange: { _ in }
             )
             .padding()
             .frame(width: 360)
@@ -35,19 +42,23 @@ struct DashboardPreviews: PreviewProvider {
             DashboardContentView(
                 dashboard: DashboardPreviewData.dashboard(),
                 isExpanded: true,
+                history: DashboardPreviewData.history(range: .week),
                 onSetVolumeMonitored: { _, _ in },
-                onSetInterfaceMonitored: { _, _ in }
+                onSetInterfaceMonitored: { _, _ in },
+                onSelectHistoryRange: { _ in }
             )
             .padding()
             .frame(width: 360)
             .preferredColorScheme(.dark)
-            .previewDisplayName("Expanded, dark")
+            .previewDisplayName("Expanded, dark, week history")
 
             DashboardContentView(
                 dashboard: DashboardPreviewData.dashboard(seed: 11),
                 isExpanded: false,
+                history: DashboardPreviewData.history(range: .hour),
                 onSetVolumeMonitored: { _, _ in },
-                onSetInterfaceMonitored: { _, _ in }
+                onSetInterfaceMonitored: { _, _ in },
+                onSelectHistoryRange: { _ in }
             )
             .padding()
             .frame(width: 360)

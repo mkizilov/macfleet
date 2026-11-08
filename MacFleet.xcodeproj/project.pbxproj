@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0A0000000000000000000011 /* MacFleetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000000000000000000010 /* MacFleetApp.swift */; };
+		0A0000000000000000000020 /* MacFleetAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0000000000000000000019 /* MacFleetAppDelegate.swift */; };
 		0A0000000000000000000016 /* MacFleetKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000000000000000000013 /* MacFleetKit */; };
 		0A0000000000000000000017 /* MacFleetState in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000000000000000000014 /* MacFleetState */; };
 		0A0000000000000000000018 /* MacFleetUI in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0000000000000000000015 /* MacFleetUI */; };
@@ -16,6 +17,7 @@
 /* Begin PBXFileReference section */
 		0A0000000000000000000006 /* MacFleet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacFleet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A0000000000000000000010 /* MacFleetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFleetApp.swift; sourceTree = "<group>"; };
+		0A0000000000000000000019 /* MacFleetAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFleetAppDelegate.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +54,7 @@
 			isa = PBXGroup;
 			children = (
 				0A0000000000000000000010 /* MacFleetApp.swift */,
+				0A0000000000000000000019 /* MacFleetAppDelegate.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -116,6 +119,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0A0000000000000000000011 /* MacFleetApp.swift in Sources */,
+				0A0000000000000000000020 /* MacFleetAppDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

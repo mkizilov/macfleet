@@ -23,7 +23,7 @@ swiftc -typecheck -swift-version 6 -target arm64-apple-macosx14.0 -sdk "$SDK" \
 
 echo "== MacFleetKit"
 swiftc -emit-library -emit-module -parse-as-library -module-name MacFleetKit \
-  -emit-module-path "$OUT/MacFleetKit.swiftmodule" -o "$OUT/libMacFleetKit.dylib" $COMMON \
+  -emit-module-path "$OUT/MacFleetKit.swiftmodule" -o "$OUT/libMacFleetKit.dylib" $COMMON -lsqlite3 \
   -Xlinker -install_name -Xlinker @rpath/libMacFleetKit.dylib $(find Sources/MacFleetKit -name '*.swift')
 
 echo "== MacFleetState"

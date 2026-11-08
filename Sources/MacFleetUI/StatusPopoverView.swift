@@ -18,11 +18,15 @@ public struct StatusPopoverView: View {
                     DashboardContentView(
                         dashboard: dashboard,
                         isExpanded: model.isShowingDetails,
+                        history: model.historyCard,
                         onSetVolumeMonitored: { mountPoint, monitored in
                             Task { await model.setVolumeMonitored(mountPoint, monitored) }
                         },
                         onSetInterfaceMonitored: { name, monitored in
                             Task { await model.setInterfaceMonitored(name, monitored) }
+                        },
+                        onSelectHistoryRange: { range in
+                            Task { await model.selectHistoryRange(range) }
                         }
                     )
                 }
@@ -66,7 +70,7 @@ public struct StatusPopoverView: View {
     private var footer: some View {
         HStack {
             Button(model.isShowingDetails ? "Show less" : "Show details") {
-                model.isShowingDetails.toggle()
+                Task { await model.setShowingDetails(!model.isShowingDetails) }
             }
             .accessibilityHint(model.isShowingDetails ? "Collapses the graphs and details" : "Expands the graphs and details")
             Spacer()

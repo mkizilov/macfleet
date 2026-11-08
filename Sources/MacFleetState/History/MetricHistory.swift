@@ -33,41 +33,9 @@ public struct MetricHistory: Equatable, Sendable {
 
     public mutating func record(_ snapshot: SystemSnapshot) {
         cpu.append(snapshot.cpu.availableValue?.total)
-        memory.append(MemoryFraction.used(snapshot.memory))
+        memory.append(snapshot.memory.availableValue?.usedFraction)
         let rate = AggregateNetworkRate.rate(snapshot.network)
         download.append(rate?.receivedPerSecond)
         upload.append(rate?.sentPerSecond)
-    }
-}
-
-enum MemoryFraction {
-    static func used(_ reading: MetricReading<MemoryUsage>) -> Double? {
-        guard let usage = reading.availableValue, usage.totalBytes > 0 else { return nil }
-        return Double(usage.usedBytes) / Double(usage.totalBytes)
-    }
-}
-
-/// Sum of per-interface rates across every monitored interface. Nil when any monitored interface lacks
-/// a rate, so a partial sum is never shown as the total.
-public enum AggregateNetworkRate {
-    public static func rate(_ network: MetricReading<[NetworkInterfaceMetrics]>) -> NetworkRate? {
-        guard let interfaces = network.availableValue else { return nil }
-        var received = 0.0
-        var sent = 0.0
-        var monitored = 0
-        for interface in interfaces {
-            switch interface.rates {
-            case let .available(rate):
-                received += rate.receivedPerSecond
-                sent += rate.sentPerSecond
-                monitored += 1
-            case .unavailable(.notMonitored):
-                continue
-            case .unavailable:
-                return nil
-            }
-        }
-        guard monitored > 0 else { return nil }
-        return NetworkRate(receivedPerSecond: received, sentPerSecond: sent)
     }
 }

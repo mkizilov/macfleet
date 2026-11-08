@@ -3,6 +3,12 @@ import Foundation
 public protocol SnapshotStoring: Sendable {
     func save(_ snapshot: SystemSnapshot) async
     func latest() async -> SystemSnapshot?
+    /// Writes anything the store is holding back. Called before the machine sleeps and before the app quits.
+    func flush() async
+}
+
+extension SnapshotStoring {
+    public func flush() async {}
 }
 
 public actor InMemorySnapshotStore: SnapshotStoring {
