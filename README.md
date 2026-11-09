@@ -659,10 +659,3 @@ Without SwiftPM, the verified script builds the agent at `.agent-local/swiftc-bu
 
 MacFleet is released under the MIT License. The full text is in [LICENSE](LICENSE). Copyright (c) 2026 Mykyta Kizilov. The
 packages include a copy of the license: `MacFleet.app/Contents/Resources/LICENSE` and the root of the headless archive.
-
-## Third-party software
-
-MacFleet has no third-party source code and no third-party dependencies, so there are no third-party notices to carry. It
-links only what ships with macOS: the system SQLite library (`libsqlite3`), and Apple's frameworks such as Foundation,
-Network, Security, Metal, and SwiftUI. Nothing from another project is copied into the repository. The tools the checks use
-(the Command Line Tools, `openssl`, `perl`, and the gitleaks history scan) are not distributed with the project.
