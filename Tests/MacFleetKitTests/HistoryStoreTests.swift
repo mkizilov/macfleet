@@ -318,7 +318,9 @@ struct HistoryStoreRetentionTests {
             let newest = origin + 490
             let openStart = floor((newest - MetricHistoryStore.closeGrace) / 300) * 300
             let remaining = try await reopened.points(in: .raw, from: .distantPast, to: .distantFuture).map(\.start)
-            #expect(remaining == (0..<50).map { origin + Double($0) * 10 }.filter { $0 >= openStart })
+            let allStarts: [TimeInterval] = (0..<50).map { (index: Int) -> TimeInterval in origin + Double(index) * 10 }
+            let expectedStarts: [TimeInterval] = allStarts.filter { $0 >= openStart }
+            #expect(remaining == expectedStarts)
             #expect(!remaining.isEmpty)
         }
     }
