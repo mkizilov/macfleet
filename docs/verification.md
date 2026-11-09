@@ -65,7 +65,7 @@ Command Line Tools and Swift 6.4.4. Nothing here was run on a second Mac, on Git
 | Third-party software | Verified | No third-party source or dependency in the tracked tree or the history. The packages link only system libraries | An audit of the Apple SDK's own terms, which are not redistributed |
 | Publication scan | Verified, with one finding | gitleaks over every commit: no leaks. The current tree has no personal data or key material. There is no remote, and `.opencode/` has never been tracked | One historic commit contains an absolute home-folder path. See Publication checks |
 | Lint and formatting | Partial | `swift-format lint` runs with the Command Line Tools' 6.4.4 | No gate. 1,424 style findings in 132 files, none of them a behaviour change |
-| CI workflow | Unverified | The YAML parses, every referenced script exists, and `ReleaseMetadataTests` guard the runner and toolchain | A run on GitHub |
+| CI workflow | Partial | The YAML parses, every referenced script exists, and `ReleaseMetadataTests` guard the runner and toolchain. Hosted run 42554238438 (commit `ab31da4`) passed `Release files`, and its test build failed at `HistoryStoreTests.swift:321` (see Toolchain limits) | Later hosted runs. The performance and package jobs were skipped by that run, so they have not run hosted |
 | Performance budgets | Partial | `performance-check.sh`: dashboard work, history save, queries, fleet ingest, history memory growth, reopen | Resident memory of a running app or agent, and rendering |
 | Energy (wakeups, CPU of the running app) | Unverified | The sampling policy and its limits are tested | Instruments measurements of wakeups and CPU |
 
@@ -84,6 +84,7 @@ Command Line Tools and Swift 6.4.4. Nothing here was run on a second Mac, on Git
 
 ## Toolchain limits
 
+- **Hosted Swift version.** Hosted run 42554238438 failed to compile one `#expect` in `HistoryStoreTests.swift`, with the solver's "unable to type-check this expression in reasonable time" error. The image's macOS 15 runner lists Xcode Command Line Tools 16.4, which bundles Swift 6.1. This sandbox has Swift 6.4.2. The assertion is now split into typed steps, and `swiftc-verify.sh` passes locally. The hosted failure was not reproduced here: the Swift 6.1.2 toolchain could not build against this Mac's SDKs (`could not build Objective-C module '_Builtin_float'`), and a matching macOS 15 SDK comes only with Xcode. Lowering the solver scope threshold on 6.4.2 showed the split form to be cheaper than the original, but not that the hosted failure would recur.
 - **SwiftPM in this sandbox.** SwiftPM runs each manifest inside its own `sandbox-exec`, and this sandbox refuses to nest
   one. `--disable-sandbox` turns off that inner sandbox only, and the manifest then compiles. The build service then
   fails on an atomic write to `XCBuildData`, with either build system. This is the sandbox's limit, and it is not in the
